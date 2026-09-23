@@ -33,8 +33,9 @@ def interval_to_ms(interval: str) -> int:
 
 
 class TradingOrchestrator:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, portfolio_guard=None):
         self.settings = settings
+        self.portfolio_guard = portfolio_guard
         self.db = TradingDB(settings.database_path)
         self.db.init()
         self.exchange = BinanceClient(settings)
@@ -348,9 +349,13 @@ class TradingOrchestrator:
             )
         )
         equity = await self._poll_equity(price)
-        daily_pnl = self.db.realized_pnl_today(
-            mode=self.settings.mode,
-            symbol=self.settings.symbol,
+        daily_pnl = (
+            self.portfolio_guard.realized_pnl_today()
+            if self.portfolio_guard is not None
+            else self.db.realized_pnl_today(
+                mode=self.settings.mode,
+                symbol=self.settings.symbol,
+            )
         )
 
         risk_decision: RiskDecision | None = None
@@ -385,6 +390,14 @@ class TradingOrchestrator:
                     False,
                     "Account equity refresh is pending; entry remains blocked",
                 )
+            elif (
+                self.portfolio_guard is not None
+                and self.portfolio_guard.entry_capacity_reason() is not None
+            ):
+                risk_decision = RiskDecision(
+                    False,
+                    self.portfolio_guard.entry_capacity_reason(),
+                )
             else:
                 risk_decision = self.risk.evaluate_entry(
                     signal=candidate_signal,
@@ -400,11 +413,21 @@ class TradingOrchestrator:
 
             if risk_decision.allowed:
                 try:
-                    execution = await self.broker.enter(
-                        candidate_signal,
-                        risk_decision,
-                        price,
-                    )
+                    if self.portfolio_guard is not None:
+                        execution = await self.portfolio_guard.execute_entry(
+                            self.settings.symbol,
+                            lambda: self.broker.enter(
+                                candidate_signal,
+                                risk_decision,
+                                price,
+                            ),
+                        )
+                    else:
+                        execution = await self.broker.enter(
+                            candidate_signal,
+                            risk_decision,
+                            price,
+                        )
                 except Exception:
                     downstream_ok = False
                     raise
@@ -501,9 +524,13 @@ class TradingOrchestrator:
                 self.settings.mode,
             )
             equity = await self.broker.equity(price)
-            daily_pnl = self.db.realized_pnl_today(
-                mode=self.settings.mode,
-                symbol=self.settings.symbol,
+            daily_pnl = (
+                self.portfolio_guard.realized_pnl_today()
+                if self.portfolio_guard is not None
+                else self.db.realized_pnl_today(
+                    mode=self.settings.mode,
+                    symbol=self.settings.symbol,
+                )
             )
 
             risk_decision: RiskDecision | None = None

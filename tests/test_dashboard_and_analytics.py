@@ -7,6 +7,8 @@ def test_dashboard_has_plain_language_sections():
     assert "Risk Engine" in DASHBOARD_HTML
     assert "Recent Trades" in DASHBOARD_HTML
     assert "What the Dashboard Means" in DASHBOARD_HTML
+    assert "Multi-Symbol Signal Monitor" in DASHBOARD_HTML
+    assert "Start All Markets" in DASHBOARD_HTML
 
 
 def test_performance_summary_is_scoped_by_mode_and_symbol(tmp_path):

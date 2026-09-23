@@ -13,8 +13,9 @@ class TradingDB:
 
     @contextmanager
     def connection(self):
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             yield conn
             conn.commit()
@@ -26,6 +27,7 @@ class TradingDB:
 
     def init(self) -> None:
         with self.connection() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS trades (
@@ -269,6 +271,50 @@ class TradingDB:
         with self.connection() as conn:
             rows = conn.execute(sql, tuple(params)).fetchall()
             return [dict(row) for row in rows]
+
+    def count_open_trades(
+        self,
+        *,
+        mode: str,
+        symbols: list[str] | None = None,
+    ) -> int:
+        clauses = ["mode=?", "status='OPEN'"]
+        params: list[Any] = [mode]
+        if symbols:
+            placeholders = ",".join("?" for _ in symbols)
+            clauses.append(f"symbol IN ({placeholders})")
+            params.extend(symbols)
+        with self.connection() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM trades WHERE {' AND '.join(clauses)}",
+                tuple(params),
+            ).fetchone()
+            return int(row["total"] or 0)
+
+    def realized_pnl_today_portfolio(
+        self,
+        *,
+        mode: str,
+        symbols: list[str],
+    ) -> float:
+        if not symbols:
+            return 0.0
+        today = datetime.now(timezone.utc).date().isoformat()
+        placeholders = ",".join("?" for _ in symbols)
+        params: list[Any] = [mode, *symbols, today]
+        with self.connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COALESCE(SUM(pnl),0) AS total
+                FROM trades
+                WHERE status='CLOSED'
+                  AND mode=?
+                  AND symbol IN ({placeholders})
+                  AND substr(closed_at,1,10)=?
+                """,
+                tuple(params),
+            ).fetchone()
+            return float(row["total"] or 0.0)
 
     def realized_pnl_today(self, *, mode: str, symbol: str) -> float:
         today = datetime.now(timezone.utc).date().isoformat()
