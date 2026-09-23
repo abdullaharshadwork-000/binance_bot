@@ -24,6 +24,18 @@ class PortfolioCoordinator:
             symbols=self.symbols,
         )
 
+    def entry_capacity_reason(self) -> str | None:
+        open_positions = self.db.count_open_trades(
+            mode=self.settings.mode,
+            symbols=self.symbols,
+        )
+        if open_positions >= self.settings.max_concurrent_positions:
+            return (
+                "Portfolio position limit reached "
+                f"({open_positions}/{self.settings.max_concurrent_positions})"
+            )
+        return None
+
     async def execute_entry(
         self,
         symbol: str,
@@ -32,19 +44,9 @@ class PortfolioCoordinator:
         # Serialize the final portfolio-capacity check and order submission so two
         # symbols cannot both pass the position-count limit at the same instant.
         async with self._entry_lock:
-            open_positions = self.db.count_open_trades(
-                mode=self.settings.mode,
-                symbols=self.symbols,
-            )
-            if open_positions >= self.settings.max_concurrent_positions:
-                return ExecutionResult(
-                    "BUY",
-                    False,
-                    (
-                        "Portfolio position limit reached "
-                        f"({open_positions}/{self.settings.max_concurrent_positions})"
-                    ),
-                )
+            capacity_reason = self.entry_capacity_reason()
+            if capacity_reason is not None:
+                return ExecutionResult("BUY", False, capacity_reason)
             return await submit()
 
 
