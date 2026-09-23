@@ -121,25 +121,47 @@ class BinanceClient:
                 return item
         raise ValueError(f"Unknown Binance symbol: {symbol}")
 
+    async def validate_symbol_assets(self, symbol: str, base_asset: str, quote_asset: str) -> None:
+        info = await self.exchange_info(symbol)
+        actual_base = str(info.get("baseAsset") or "")
+        actual_quote = str(info.get("quoteAsset") or "")
+        if actual_base != base_asset or actual_quote != quote_asset:
+            raise ValueError(
+                f"Configured assets do not match {symbol}: Binance reports "
+                f"{actual_base}/{actual_quote}, configured {base_asset}/{quote_asset}"
+            )
+
     async def symbol_filters(self, symbol: str) -> dict[str, dict]:
         info = await self.exchange_info(symbol)
         return {f["filterType"]: f for f in info.get("filters", [])}
 
     async def normalize_quantity_decimal(self, symbol: str, quantity: Decimal, price: Decimal) -> Decimal:
         filters = await self.symbol_filters(symbol)
-        lot = filters.get("LOT_SIZE", {})
-        step = Decimal(str(lot.get("stepSize", "0.00000001")))
-        min_qty = Decimal(str(lot.get("minQty", "0")))
+
+        lot = filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE") or {}
+        step = Decimal(str(lot.get("stepSize", "0") or "0"))
+        min_qty = Decimal(str(lot.get("minQty", "0") or "0"))
+        max_qty = Decimal(str(lot.get("maxQty", "0") or "0"))
 
         if step <= 0:
-            step = Decimal("0.00000001")
+            lot = filters.get("LOT_SIZE", {})
+            step = Decimal(str(lot.get("stepSize", "0.00000001") or "0.00000001"))
+            min_qty = Decimal(str(lot.get("minQty", "0") or "0"))
+            max_qty = Decimal(str(lot.get("maxQty", "0") or "0"))
+
         normalized = (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
         if normalized < min_qty:
             return Decimal("0")
+        if max_qty > 0 and normalized > max_qty:
+            return Decimal("0")
 
+        notional = normalized * price
         notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
-        min_notional = Decimal(str(notional_filter.get("minNotional", "0")))
-        if normalized * price < min_notional:
+        min_notional = Decimal(str(notional_filter.get("minNotional", "0") or "0"))
+        max_notional = Decimal(str(notional_filter.get("maxNotional", "0") or "0"))
+        if min_notional > 0 and notional < min_notional:
+            return Decimal("0")
+        if max_notional > 0 and notional > max_notional:
             return Decimal("0")
         return normalized
 
@@ -163,32 +185,59 @@ class BinanceClient:
         return await self._request("GET", "/api/v3/account", signed=True)
 
     async def asset_balance(self, asset: str) -> float:
+        """Return free balance. Use asset_balances() for total free + locked equity."""
         account = await self.account()
         for balance in account.get("balances", []):
             if balance["asset"] == asset:
-                return float(balance["free"])
+                return float(balance.get("free") or 0.0)
         return 0.0
 
     async def asset_balances(self, assets: set[str]) -> dict[str, float]:
+        """Return total balances (free + locked) so equity includes exchange-held funds."""
         account = await self.account()
         result = {asset: 0.0 for asset in assets}
         for balance in account.get("balances", []):
             asset = balance.get("asset")
             if asset in result:
-                result[asset] = float(balance.get("free") or 0.0)
+                free = Decimal(str(balance.get("free") or "0"))
+                locked = Decimal(str(balance.get("locked") or "0"))
+                result[asset] = float(free + locked)
         return result
 
-    async def market_order(self, symbol: str, side: str, quantity: float) -> dict:
+    async def market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        *,
+        client_order_id: str | None = None,
+    ) -> dict:
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": self._format_qty(quantity),
+            "newOrderRespType": "FULL",
+        }
+        if client_order_id:
+            params["newClientOrderId"] = client_order_id
+        return await self._request("POST", "/api/v3/order", params, signed=True)
+
+    async def get_order(self, symbol: str, *, client_order_id: str) -> dict:
         return await self._request(
-            "POST",
+            "GET",
             "/api/v3/order",
-            {"symbol": symbol, "side": side, "type": "MARKET", "quantity": self._format_qty(quantity)},
+            {"symbol": symbol, "origClientOrderId": client_order_id},
             signed=True,
         )
 
     @staticmethod
     def _format_qty(quantity: float) -> str:
         return format(Decimal(str(quantity)).normalize(), "f")
+
+    @staticmethod
+    def executed_quantity(order: dict) -> float:
+        return float(Decimal(str(order.get("executedQty") or "0")))
 
     @staticmethod
     def weighted_fill_price(order: dict, fallback: float) -> float:
@@ -204,24 +253,36 @@ class BinanceClient:
         quote = Decimal(str(order.get("cummulativeQuoteQty") or "0"))
         return float(quote / executed) if executed > 0 and quote > 0 else fallback
 
+    def commission_details(self, order: dict) -> list[dict]:
+        return [
+            {
+                "asset": str(fill.get("commissionAsset") or ""),
+                "amount": float(Decimal(str(fill.get("commission") or "0"))),
+            }
+            for fill in (order.get("fills") or [])
+            if Decimal(str(fill.get("commission") or "0")) > 0
+        ]
+
     def estimated_order_fee_quote(self, order: dict, fill_price: float) -> float:
-        """Best-effort fee in quote currency using fill commissions; falls back to configured fee bps."""
+        """Best-effort fee in quote currency. Third-asset fees remain recorded separately."""
         fills = order.get("fills") or []
         total = Decimal("0")
-        found_supported_fee = False
+        has_any_fill_fee = False
         for fill in fills:
             commission = Decimal(str(fill.get("commission") or "0"))
             asset = str(fill.get("commissionAsset") or "")
-            if commission <= 0:
+            if commission < 0:
+                continue
+            if "commission" in fill:
+                has_any_fill_fee = True
+            if commission == 0:
                 continue
             if asset == self.settings.quote_asset:
                 total += commission
-                found_supported_fee = True
             elif asset == self.settings.base_asset:
                 total += commission * Decimal(str(fill.get("price") or fill_price))
-                found_supported_fee = True
 
-        if found_supported_fee:
+        if has_any_fill_fee:
             return float(total)
 
         quote_qty = Decimal(str(order.get("cummulativeQuoteQty") or "0"))
