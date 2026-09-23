@@ -209,14 +209,16 @@ async def market_candles(interval: str | None = None, limit: int = 120):
     if selected not in SUPPORTED_INTERVALS:
         raise HTTPException(status_code=400, detail="Unsupported candle interval")
     limit = max(30, min(limit, 300))
+    history_limit = max(250, limit)
     try:
-        frame = await bot.exchange.klines(settings.symbol, selected, limit)
+        frame = await bot.exchange.klines(settings.symbol, selected, history_limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     frame = frame.copy()
     frame["ema_fast"] = ema(frame["close"], 20)
     frame["ema_slow"] = ema(frame["close"], 50)
+    frame = frame.tail(limit)
 
     candles = []
     for row in frame.to_dict(orient="records"):
