@@ -53,7 +53,7 @@ DASHBOARD_HTML = r'''<!doctype html>
   <div id="liveNotice" class="notice" style="display:none"></div>
 
   <div class="controls">
-    <button class="b-blue action" onclick="act('/bot/run-once','Refreshing strategy and checking the market…')">▶ Analyze Now</button>
+    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/run-once','Refreshing strategy and checking the market…')">▶ Analyze Now</button>
     <button class="b-green action" onclick="act('/bot/start','Starting automated checks…')">● Start Bot</button>
     <button class="b-red action" onclick="act('/bot/stop','Stopping bot…')">■ Stop Bot</button>
     <button class="b-gray action" onclick="loadAll(true)">↻ Refresh</button>
@@ -168,12 +168,9 @@ let candleMeta={};
 let latestDashboard=null;
 let candleHoverIndex=null;
 let candleLoading=false;
+let dashboardRequestSeq=0;
+let candleRequestSeq=0;
 
-function ema(values,period){
-  const out=new Array(values.length).fill(null); if(values.length<period)return out;
-  const k=2/(period+1); let seed=0; for(let i=0;i<period;i++)seed+=values[i]; let prev=seed/period; out[period-1]=prev;
-  for(let i=period;i<values.length;i++){prev=values[i]*k+prev*(1-k);out[i]=prev} return out;
-}
 function chartPrice(v){
   if(v===null||v===undefined||Number.isNaN(Number(v)))return '—';
   const n=Number(v); return '$'+n.toLocaleString('en-US',{minimumFractionDigits:n>=1000?2:4,maximumFractionDigits:n>=1000?2:6});
@@ -182,12 +179,14 @@ function candleTime(ms){return new Date(Number(ms)).toLocaleString([], {month:'s
 
 async function loadCandles(force=false){
   if(candleLoading&&!force)return;
+  const requestSeq=++candleRequestSeq;
   candleLoading=true;
   try{
     const interval=$('candleInterval')?.value || latestDashboard?.config?.interval || '15m';
     const limit=Number($('candleCount')?.value||120);
     const r=await fetch(`/market/candles?interval=${encodeURIComponent(interval)}&limit=${limit}`);
     const j=await r.json(); if(!r.ok)throw new Error(j.detail||'Could not load candles');
+    if(requestSeq!==candleRequestSeq)return;
     candleData=j.candles||[]; candleMeta=j;
     $('candleSource').textContent=`${j.market_source} · ${j.symbol} · ${j.interval}`;
     $('candleUpdated').textContent='Candles updated '+new Date().toLocaleTimeString();
@@ -208,7 +207,8 @@ function drawCandles(){
   canvas.width=Math.floor(rect.width*dpr);canvas.height=Math.floor(rect.height*dpr);canvas.style.width=rect.width+'px';canvas.style.height=rect.height+'px';
   const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);const w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);
   const left=12,right=82,top=16,bottom=24,volumeH=72,gap=12; const priceBottom=h-bottom-volumeH-gap;
-  const closes=candleData.map(c=>Number(c.close)), e20=ema(closes,20), e50=ema(closes,50);
+  const e20=candleData.map(c=>Number.isFinite(Number(c.ema_fast))?Number(c.ema_fast):null);
+  const e50=candleData.map(c=>Number.isFinite(Number(c.ema_slow))?Number(c.ema_slow):null);
   const overlay=[];const pos=latestDashboard?.open_trade;if(pos){overlay.push(Number(pos.entry_price),Number(pos.stop_price),Number(pos.take_profit_price))} if(latestDashboard?.price)overlay.push(Number(latestDashboard.price));
   let lo=Math.min(...candleData.map(c=>Number(c.low)),...overlay.filter(Number.isFinite)),hi=Math.max(...candleData.map(c=>Number(c.high)),...overlay.filter(Number.isFinite)); const span=Math.max(1e-9,hi-lo);lo-=span*.04;hi+=span*.04;
   const plotW=w-left-right, n=candleData.length, step=plotW/Math.max(1,n), bodyW=Math.max(1,Math.min(10,step*.62)); const X=i=>left+step*(i+.5),Y=v=>top+(hi-v)/(hi-lo)*(priceBottom-top);
@@ -304,15 +304,20 @@ function renderConfig(d){
 }
 
 async function loadAll(showLoading=false){
+  const requestSeq=++dashboardRequestSeq;
   if(showLoading)setLoading(true);
   try{
     const r=await fetch('/dashboard-data');const d=await r.json();if(!r.ok)throw new Error(d.detail||'Dashboard request failed');
+    if(requestSeq!==dashboardRequestSeq)return;
     latestDashboard=d; drawCandles();
     const mode=d.config.mode;$('modePill').className='mode-pill '+mode;$('modePill').innerHTML=`<span class="dot"></span><span>${mode.toUpperCase()} MODE</span>`;
-    if(d.market_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Market/account data warning: '+d.market_error}
+    if(d.engine_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Engine warning: '+d.engine_error}
+    else if(d.market_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Market/account data warning: '+d.market_error}
     else if(mode==='live'){$('liveNotice').style.display='block';$('liveNotice').textContent=d.config.live_orders_allowed?'LIVE ORDERS ARE ENABLED. Real funds can be used.':'Live mode selected, but real orders are blocked because ALLOW_LIVE_TRADING=false.'}
     else $('liveNotice').style.display='none';
     $('running').innerHTML=d.running?'<span class="green">RUNNING</span>':'<span class="red">STOPPED</span>';
+    $('analyzeBtn').disabled=Boolean(d.running);
+    $('analyzeBtn').title=d.running?'Stop the automated bot before running a manual analysis cycle':'';
     $('cycleNote').textContent=`Risk check every ${d.config.cycle_seconds}s · strategy on closed ${d.config.interval} candles`;
     $('price').textContent=money(d.price);$('symbol').textContent=`${d.config.symbol} · ${d.market_monitor?.source||'waiting'}`;$('equity').textContent=money(d.equity);
     const mm=d.market_monitor||{};
