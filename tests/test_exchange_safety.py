@@ -100,3 +100,26 @@ def test_unresolved_order_blocks_new_entry(tmp_path):
         await exchange.close()
 
     asyncio.run(scenario())
+
+
+def test_third_asset_commission_is_converted_to_quote():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client.ticker_price = AsyncMock(return_value=200.0)
+        order = {
+            "fills": [
+                {
+                    "price": "100",
+                    "qty": "1",
+                    "commission": "0.01",
+                    "commissionAsset": "BNB",
+                }
+            ]
+        }
+
+        fee = await client.order_fee_quote(order, 100.0)
+        assert fee == 2.0
+        client.ticker_price.assert_awaited_with("BNBUSDT")
+        await client.close()
+
+    asyncio.run(scenario())
