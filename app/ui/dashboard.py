@@ -37,6 +37,8 @@ DASHBOARD_HTML = r'''<!doctype html>
     .candle-wrap{height:430px;position:relative;border:1px solid #1b314a;border-radius:12px;background:#071421;overflow:hidden}.candle-wrap canvas{display:block;width:100%;height:100%}.candle-tooltip{position:absolute;display:none;pointer-events:none;z-index:3;top:10px;left:10px;padding:9px 11px;border-radius:9px;background:rgba(5,13,24,.94);border:1px solid #29425f;font-size:11px;line-height:1.55;color:#dbe7f6;min-width:190px}.candle-tooltip b{color:white}.chart-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;color:var(--muted);font-size:11px}.legend-item{display:inline-flex;align-items:center;gap:6px}.legend-line{width:18px;height:3px;border-radius:2px;background:#7bb1ff}.legend-line.slow{background:#f59e0b}.legend-line.entry{background:#7bb1ff}.legend-line.stop{background:#ef4444}.legend-line.take{background:#22c55e}.legend-candle{width:9px;height:9px;border-radius:2px;background:#22c55e}.chart-status{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px}.chart-status span{font-size:11px;color:var(--muted)}
     .table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:10px 9px;border-bottom:1px solid rgba(70,95,126,.25);white-space:nowrap}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase}tr:hover td{background:rgba(255,255,255,.018)}
     .footer{color:var(--muted);font-size:12px;text-align:right;padding:6px 2px 0}.loading{opacity:.72}
+    .dashboard-stale .stats,.dashboard-stale .market-card,.dashboard-stale .two,.dashboard-stale .three{opacity:.62}
+    .forming-note{color:var(--amber);font-weight:700}
     .help-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.help{padding:10px;border-radius:10px;background:#091725;border:1px solid #1c334c}.help b{display:block;margin-bottom:5px;font-size:12px}.help span{font-size:12px;color:var(--muted);line-height:1.45}
     details{margin-top:10px}summary{cursor:pointer;color:#7bb1ff;font-size:12px;font-weight:700}pre{white-space:pre-wrap;word-break:break-word;background:#06101d;border:1px solid var(--line);padding:12px;border-radius:10px;color:#b9c9db;max-height:330px;overflow:auto;font-size:11px}
     @media(max-width:1080px){.stats{grid-template-columns:repeat(3,1fr)}.two,.three{grid-template-columns:1fr}}
@@ -53,16 +55,16 @@ DASHBOARD_HTML = r'''<!doctype html>
   <div id="liveNotice" class="notice" style="display:none"></div>
 
   <div class="controls">
-    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/run-once','Refreshing strategy and checking the market…')">▶ Analyze Now</button>
-    <button class="b-green action" onclick="act('/bot/start','Starting automated checks…')">● Start Bot</button>
-    <button class="b-red action" onclick="act('/bot/stop','Stopping bot…')">■ Stop Bot</button>
+    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/analyze','Running read-only market analysis…')">▶ Analyze Market</button>
+    <button id="startBtn" class="b-green action" onclick="act('/bot/start','Starting automated checks…')">● Start Bot</button>
+    <button id="stopBtn" class="b-red action" onclick="act('/bot/stop','Stopping bot…')">■ Stop Bot</button>
     <button class="b-gray action" onclick="loadAll(true)">↻ Refresh</button>
   </div>
 
   <div class="grid stats">
     <div class="card"><div class="metric-label">Bot status</div><div class="metric-value" id="running">—</div><div class="metric-note" id="cycleNote">—</div></div>
-    <div class="card"><div class="metric-label">BTC price</div><div class="metric-value" id="price">—</div><div class="metric-note" id="symbol">—</div></div>
-    <div class="card"><div class="metric-label">Account equity</div><div class="metric-value" id="equity">—</div><div class="metric-note">Estimated current value</div></div>
+    <div class="card"><div class="metric-label" id="priceLabel">Asset price</div><div class="metric-value" id="price">—</div><div class="metric-note" id="symbol">—</div></div>
+    <div class="card"><div class="metric-label">Account equity</div><div class="metric-value" id="equity">—</div><div class="metric-note" id="equityNote">Estimated current value</div></div>
     <div class="card"><div class="metric-label">Today's realized P/L</div><div class="metric-value" id="dailyPnl">—</div><div class="metric-note" id="dailyLimit">—</div></div>
     <div class="card"><div class="metric-label">Win rate</div><div class="metric-value" id="winRate">—</div><div class="metric-note" id="tradeCount">No closed trades</div></div>
     <div class="card"><div class="metric-label">Total realized P/L</div><div class="metric-value" id="totalPnl">—</div><div class="metric-note" id="profitFactor">Profit factor —</div></div>
@@ -73,13 +75,13 @@ DASHBOARD_HTML = r'''<!doctype html>
     <div class="market-head">
       <div>
         <h2 style="margin-bottom:0">Live Candlestick Market Chart</h2>
-        <div class="market-title-note">OHLC candles and volume from the same Binance market source used by this mode. The last candle may still be forming.</div>
-        <div class="chart-status"><span id="candleSource">Loading candles…</span><span>•</span><span id="candleUpdated">—</span></div>
+        <div class="market-title-note">OHLC candles and volume from the same Binance market source used by this mode. Faded candles are still forming and are not used for strategy decisions.</div>
+        <div class="chart-status"><span id="candleSource">Loading candles…</span><span>•</span><span id="candleUpdated">—</span><span>•</span><span id="strategyCandleStatus">Strategy candle —</span></div>
       </div>
       <div class="chart-controls">
         <label for="candleInterval">Chart interval</label>
         <select id="candleInterval" aria-label="Candlestick chart interval">
-          <option value="1m">1m</option><option value="5m">5m</option><option value="15m" selected>15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option>
+          <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option><option value="15m" selected>15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="2h">2h</option><option value="4h">4h</option><option value="6h">6h</option><option value="8h">8h</option><option value="12h">12h</option><option value="1d">1d</option><option value="3d">3d</option><option value="1w">1w</option>
         </select>
         <label for="candleCount">Candles</label>
         <select id="candleCount" aria-label="Number of candles">
@@ -99,6 +101,7 @@ DASHBOARD_HTML = r'''<!doctype html>
       <span class="legend-item"><span class="legend-line entry"></span> Entry</span>
       <span class="legend-item"><span class="legend-line stop"></span> Stop</span>
       <span class="legend-item"><span class="legend-line take"></span> Take profit</span>
+      <span class="legend-item"><span class="forming-note">◌</span> Faded = forming candle</span>
     </div>
   </div>
 
@@ -115,7 +118,7 @@ DASHBOARD_HTML = r'''<!doctype html>
 
   <div class="grid three">
     <div class="card"><h2>Risk Engine</h2><div id="risk">No decision yet.</div></div>
-    <div class="card"><h2>Last Execution</h2><div id="execution">No execution yet.</div></div>
+    <div class="card"><h2>Last Order Attempt</h2><div id="execution">No BUY/SELL attempt yet.</div></div>
     <div class="card"><h2>Adaptive Learning</h2><div id="learning">Loading…</div></div>
   </div>
 
@@ -140,7 +143,7 @@ DASHBOARD_HTML = r'''<!doctype html>
         <div class="help"><b>BUY / HOLD / SELL</b><span>The strategy's current market opinion. A BUY still must pass the risk engine before any order is allowed.</span></div>
         <div class="help"><b>Confidence</b><span>How strongly the strategy supports its signal. It must reach the current threshold before an entry can be considered.</span></div>
         <div class="help"><b>Risk engine</b><span>The final deterministic safety gate. It controls position size, stop loss, exposure and the daily loss limit.</span></div>
-        <div class="help"><b>Equity</b><span>Your estimated account value. In paper mode this is simulated USDT plus the current value of any BTC position.</span></div>
+        <div class="help"><b>Equity</b><span>Your estimated account value in the configured quote asset. In paper mode it combines simulated quote balance with the current value of the configured base-asset position.</span></div>
         <div class="help"><b>Win rate</b><span>Percentage of closed trades that made money. It should never be judged without average win/loss and total P/L.</span></div>
         <div class="help"><b>Profit factor</b><span>Gross winning P/L divided by gross losing P/L. It is shown only after enough closed trades exist to make it meaningful.</span></div>
         <div class="help"><b>1-second market monitor</b><span>While the engine is running, the latest market price is checked every second for stop loss and take profit conditions.</span></div>
@@ -153,7 +156,8 @@ DASHBOARD_HTML = r'''<!doctype html>
 </div>
 <script>
 const $ = id => document.getElementById(id);
-const money = v => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(Number(v));
+let baseAsset='BASE', quoteAsset='QUOTE';
+const money = v => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':quoteAsset+' '+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const num = (v,d=4) => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':Number(v).toFixed(d);
 const pct = (v,d=2) => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':(Number(v)*100).toFixed(d)+'%';
 const cls = v => Number(v)>0?'green':Number(v)<0?'red':'amber';
@@ -161,10 +165,25 @@ const esc = v => String(v??'—').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;'
 const badge = (text,type='blue') => `<span class="badge badge-${type}">${esc(text)}</span>`;
 function sideBadge(side){ side=String(side||'HOLD').toUpperCase(); return badge(side,side==='BUY'?'green':side==='SELL'?'red':'amber'); }
 function row(k,v){return `<div class="row"><span class="key">${k}</span><span class="val">${v}</span></div>`}
+function syncActionButtons(){
+  if(!latestDashboard)return;
+  const running=Boolean(latestDashboard.running);
+  if($('analyzeBtn')){$('analyzeBtn').disabled=running;$('analyzeBtn').title=running?'Stop the automated bot before running read-only analysis':'Read-only analysis; this button never submits an order'}
+  if($('startBtn'))$('startBtn').disabled=running;
+  if($('stopBtn'))$('stopBtn').disabled=!running;
+}
 function setLoading(on){
   document.querySelectorAll('.action').forEach(b=>b.disabled=on);
-  if(!on&&latestDashboard?.running&&$('analyzeBtn'))$('analyzeBtn').disabled=true;
+  if(!on)syncActionButtons();
   document.body.classList.toggle('loading',on)
+}
+function markDashboardStale(message){
+  document.body.classList.add('dashboard-stale');
+  $('liveNotice').style.display='block';
+  $('liveNotice').textContent='Dashboard connection warning: '+message;
+  $('running').innerHTML='<span class="amber">UNKNOWN</span>';
+  $('feedStatus').innerHTML='<span class="red">STALE</span>';
+  $('feedAge').textContent='Live dashboard updates are unavailable';
 }
 
 let candleData=[];
@@ -172,23 +191,30 @@ let candleMeta={};
 let latestDashboard=null;
 let candleHoverIndex=null;
 let candleLoading=false;
+let dashboardLoading=false;
 let dashboardRequestSeq=0;
 let candleRequestSeq=0;
+let candleController=null;
+let dashboardController=null;
+let lastDashboardSuccessAt=0;
 
 function chartPrice(v){
   if(v===null||v===undefined||Number.isNaN(Number(v)))return '—';
-  const n=Number(v); return '$'+n.toLocaleString('en-US',{minimumFractionDigits:n>=1000?2:4,maximumFractionDigits:n>=1000?2:6});
+  const n=Number(v); return quoteAsset+' '+n.toLocaleString('en-US',{minimumFractionDigits:n>=1000?2:4,maximumFractionDigits:n>=1000?2:6});
 }
 function candleTime(ms){return new Date(Number(ms)).toLocaleString([], {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 
 async function loadCandles(force=false){
   if(candleLoading&&!force)return;
+  if(force&&candleController)candleController.abort();
   const requestSeq=++candleRequestSeq;
+  const controller=new AbortController();
+  candleController=controller;
   candleLoading=true;
   try{
     const interval=$('candleInterval')?.value || latestDashboard?.config?.interval || '15m';
     const limit=Number($('candleCount')?.value||120);
-    const r=await fetch(`/market/candles?interval=${encodeURIComponent(interval)}&limit=${limit}`);
+    const r=await fetch(`/market/candles?interval=${encodeURIComponent(interval)}&limit=${limit}`,{signal:controller.signal});
     const j=await r.json(); if(!r.ok)throw new Error(j.detail||'Could not load candles');
     if(requestSeq!==candleRequestSeq)return;
     candleData=j.candles||[]; candleMeta=j;
@@ -196,8 +222,13 @@ async function loadCandles(force=false){
     $('candleUpdated').textContent='Candles updated '+new Date().toLocaleTimeString();
     drawCandles();
   }catch(e){
-    $('candleSource').textContent='Chart error: '+e.message;
-  }finally{candleLoading=false}
+    if(e.name!=='AbortError'&&requestSeq===candleRequestSeq)$('candleSource').textContent='Chart error: '+e.message;
+  }finally{
+    if(requestSeq===candleRequestSeq){
+      candleLoading=false;
+      if(candleController===controller)candleController=null;
+    }
+  }
 }
 
 function drawPriceLine(ctx,y,x0,x1,color,label,value,dash=[5,4]){
@@ -222,13 +253,16 @@ function drawCandles(){
   const vmax=Math.max(1,...candleData.map(c=>Number(c.volume)||0));candleData.forEach((c,i)=>{const x=X(i),vol=(Number(c.volume)||0)/vmax*volumeH;const up=Number(c.close)>=Number(c.open);ctx.fillStyle=up?'rgba(34,197,94,.28)':'rgba(239,68,68,.28)';ctx.fillRect(x-bodyW/2,h-bottom-vol,bodyW,vol)});
   ctx.fillStyle='#71849c';ctx.fillText('VOL',left,h-bottom-volumeH-5);
   // candles
-  candleData.forEach((c,i)=>{const x=X(i),o=Y(Number(c.open)),cl=Y(Number(c.close)),high=Y(Number(c.high)),low=Y(Number(c.low));const up=Number(c.close)>=Number(c.open),color=up?'#22c55e':'#ef4444';ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,high);ctx.lineTo(x,low);ctx.stroke();ctx.fillStyle=color;const y=Math.min(o,cl),bh=Math.max(1.4,Math.abs(cl-o));ctx.fillRect(x-bodyW/2,y,bodyW,bh)});
+  candleData.forEach((c,i)=>{const x=X(i),o=Y(Number(c.open)),cl=Y(Number(c.close)),high=Y(Number(c.high)),low=Y(Number(c.low));const up=Number(c.close)>=Number(c.open),color=up?'#22c55e':'#ef4444';ctx.save();if(c.is_closed===false)ctx.globalAlpha=.42;ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,high);ctx.lineTo(x,low);ctx.stroke();ctx.fillStyle=color;const y=Math.min(o,cl),bh=Math.max(1.4,Math.abs(cl-o));ctx.fillRect(x-bodyW/2,y,bodyW,bh);ctx.restore()});
   // EMAs
   function line(series,color){ctx.strokeStyle=color;ctx.lineWidth=1.35;ctx.beginPath();let started=false;series.forEach((v,i)=>{if(v===null)return;const x=X(i),y=Y(v);if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y)});ctx.stroke()}
   line(e20,'#7bb1ff');line(e50,'#f59e0b');
   // current price and open trade levels
   const current=Number(latestDashboard?.price);if(Number.isFinite(current))drawPriceLine(ctx,Y(current),left,w-right,'#22d3ee','NOW',current,[2,3]);
   if(pos){drawPriceLine(ctx,Y(Number(pos.entry_price)),left,w-right,'#7bb1ff','ENTRY',Number(pos.entry_price));drawPriceLine(ctx,Y(Number(pos.stop_price)),left,w-right,'#ef4444','STOP',Number(pos.stop_price));drawPriceLine(ctx,Y(Number(pos.take_profit_price)),left,w-right,'#22c55e','TAKE',Number(pos.take_profit_price));}
+  const signalClose=Number(latestDashboard?.last_cycle?.signal_candle_close_time);
+  const signalIndex=Number.isFinite(signalClose)?candleData.findIndex(c=>Number(c.close_time)===signalClose):-1;
+  if(signalIndex>=0){const sx=X(signalIndex);ctx.save();ctx.strokeStyle='#22d3ee';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(sx,top);ctx.lineTo(sx,priceBottom);ctx.stroke();ctx.restore()}
   // time labels
   ctx.fillStyle='#71849c';ctx.textBaseline='alphabetic';const marks=5;for(let j=0;j<=marks;j++){const i=Math.min(n-1,Math.floor((n-1)*j/marks));const txt=new Date(Number(candleData[i].open_time)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});ctx.fillText(txt,Math.max(left,X(i)-18),h-7)}
   // hover crosshair
@@ -237,12 +271,16 @@ function drawCandles(){
 
 function showCandleTooltip(ev){
   if(!candleData.length)return;const wrap=$('candleWrap'),rect=wrap.getBoundingClientRect(),left=12,right=82,plotW=rect.width-left-right;const x=ev.clientX-rect.left;if(x<left||x>rect.width-right){candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles();return}
-  const i=Math.max(0,Math.min(candleData.length-1,Math.floor((x-left)/(plotW/candleData.length))));candleHoverIndex=i;const c=candleData[i],tip=$('candleTooltip');const up=Number(c.close)>=Number(c.open);tip.innerHTML=`<b>${candleTime(c.open_time)}</b><br>O ${chartPrice(c.open)} &nbsp; H ${chartPrice(c.high)}<br>L ${chartPrice(c.low)} &nbsp; C <span class="${up?'green':'red'}">${chartPrice(c.close)}</span><br>Volume ${Number(c.volume).toLocaleString('en-US',{maximumFractionDigits:4})}`;tip.style.display='block';tip.style.left=Math.min(rect.width-205,Math.max(8,x+14))+'px';tip.style.top='10px';drawCandles();
+  const i=Math.max(0,Math.min(candleData.length-1,Math.floor((x-left)/(plotW/candleData.length))));candleHoverIndex=i;const c=candleData[i],tip=$('candleTooltip');const up=Number(c.close)>=Number(c.open);tip.innerHTML=`<b>${candleTime(c.open_time)}</b> · ${c.is_closed===false?'<span class="amber">FORMING</span>':'CLOSED'}<br>O ${chartPrice(c.open)} &nbsp; H ${chartPrice(c.high)}<br>L ${chartPrice(c.low)} &nbsp; C <span class="${up?'green':'red'}">${chartPrice(c.close)}</span><br>Volume ${Number(c.volume).toLocaleString('en-US',{maximumFractionDigits:4})}`;tip.style.display='block';tip.style.left=Math.min(rect.width-205,Math.max(8,x+14))+'px';tip.style.top='10px';drawCandles();
 }
 
 async function act(url,msg){
+  if(url==='/bot/start'&&latestDashboard?.config?.mode==='live'&&latestDashboard?.config?.live_orders_allowed){
+    const ok=confirm('LIVE ORDERS ARE ENABLED. Starting the bot can use real funds. Continue?');
+    if(!ok)return;
+  }
   setLoading(true); $('updated').textContent=msg;
-  try{const r=await fetch(url,{method:'POST'});const j=await r.json();if(!r.ok)throw new Error(j.detail||'Request failed');await loadAll(false)}
+  try{const r=await fetch(url,{method:'POST'});const j=await r.json();if(!r.ok)throw new Error(j.detail||'Request failed');await loadAll(false,true)}
   catch(e){alert(e.message);$('updated').textContent='Action failed: '+e.message}
   finally{setLoading(false)}
 }
@@ -266,10 +304,10 @@ function renderRisk(cycle){
   $('risk').innerHTML=`${row('Entry',r.allowed?badge('ALLOWED','green'):badge('BLOCKED','red'))}${row('Reason',esc(r.reason))}${row('Quantity',num(r.quantity,8))}${row('Stop loss',money(r.stop_price))}${row('Take profit',money(r.take_profit_price))}<div class="explain">A signal cannot open a new position unless this panel says ALLOWED.</div>`;
 }
 
-function renderExecution(cycle){
-  const e=cycle?.execution;if(!e){$('execution').innerHTML='<span class="muted">No execution yet.</span>';return}
+function renderExecution(e){
+  if(!e){$('execution').innerHTML='<span class="muted">No BUY/SELL attempt has been recorded in this process.</span>';return}
   const action=String(e.action||'NONE').toUpperCase();
-  $('execution').innerHTML=`${row('Action',sideBadge(action))}${row('Result',e.success?badge('SUCCESS','green'):badge('FAILED','red'))}${row('Message',esc(e.message))}${e.details?row('Details',esc(JSON.stringify(e.details))):''}`;
+  $('execution').innerHTML=`${row('Action',sideBadge(action))}${row('Result',e.success?badge('SUCCESS','green'):badge('FAILED','red'))}${row('Time',e.timestamp?new Date(e.timestamp).toLocaleString():'—')}${row('Message',esc(e.message))}${e.details?row('Details',esc(JSON.stringify(e.details))):''}`;
 }
 
 function renderPosition(d){
@@ -307,21 +345,32 @@ function renderConfig(d){
   $('config').innerHTML=`${row('Mode',badge(c.mode.toUpperCase(),c.mode==='live'?'red':c.mode==='testnet'?'amber':'blue'))}${row('Pair / strategy candle',`${esc(c.symbol)} · ${esc(c.interval)}`)}${row('Market / risk monitor',`Every ${c.cycle_seconds}s`)}${row('Price stream',c.use_websocket_market_data?badge('WEBSOCKET','green'):badge('REST','amber'))}${row('Strategy timing',`New completed ${esc(c.interval)} candle`)}${row('Account refresh',`Every ${c.account_refresh_seconds}s in testnet/live`)}${row('Paper slippage model',`${num(c.paper_slippage_bps,1)} bps per fill`)}${row('Risk per trade',pct(c.risk_per_trade))}${row('Max position allocation',pct(c.max_position_fraction))}${row('Daily loss stop',pct(c.max_daily_loss_fraction))}${row('Stop loss',pct(c.stop_loss_pct))}${row('Take profit',pct(c.take_profit_pct))}${row('Base signal threshold',pct(c.min_signal_confidence))}${row('Adaptive learning',c.adaptive_learning?badge('ON','green'):badge('OFF','amber'))}${row('LLM advisor',c.llm_advisor?badge('ON','blue'):badge('OFF','amber'))}${row('Live orders',c.live_orders_allowed?badge('ENABLED','red'):badge('BLOCKED','green'))}`;
 }
 
-async function loadAll(showLoading=false){
+async function loadAll(showLoading=false,force=false){
+  if(dashboardLoading&&!force)return;
+  if(force&&dashboardController)dashboardController.abort();
   const requestSeq=++dashboardRequestSeq;
+  const controller=new AbortController();
+  dashboardController=controller;
+  dashboardLoading=true;
   if(showLoading)setLoading(true);
   try{
-    const r=await fetch('/dashboard-data');const d=await r.json();if(!r.ok)throw new Error(d.detail||'Dashboard request failed');
+    const r=await fetch('/dashboard-data',{signal:controller.signal});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Dashboard request failed');
     if(requestSeq!==dashboardRequestSeq)return;
-    latestDashboard=d; drawCandles();
+    latestDashboard=d;
+    lastDashboardSuccessAt=Date.now();
+    document.body.classList.remove('dashboard-stale');
+    baseAsset=d.config.base_asset||'BASE';
+    quoteAsset=d.config.quote_asset||'QUOTE';
+    $('priceLabel').textContent=baseAsset+' price';
+    $('equityNote').textContent='Estimated current value in '+quoteAsset;
+    drawCandles();
     const mode=d.config.mode;$('modePill').className='mode-pill '+mode;$('modePill').innerHTML=`<span class="dot"></span><span>${mode.toUpperCase()} MODE</span>`;
     if(d.engine_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Engine warning: '+d.engine_error}
     else if(d.market_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Market/account data warning: '+d.market_error}
     else if(mode==='live'){$('liveNotice').style.display='block';$('liveNotice').textContent=d.config.live_orders_allowed?'LIVE ORDERS ARE ENABLED. Real funds can be used.':'Live mode selected, but real orders are blocked because ALLOW_LIVE_TRADING=false.'}
     else $('liveNotice').style.display='none';
     $('running').innerHTML=d.running?'<span class="green">RUNNING</span>':'<span class="red">STOPPED</span>';
-    $('analyzeBtn').disabled=Boolean(d.running);
-    $('analyzeBtn').title=d.running?'Stop the automated bot before running a manual analysis cycle':'';
+    syncActionButtons();
     $('cycleNote').textContent=`Risk check every ${d.config.cycle_seconds}s · strategy on closed ${d.config.interval} candles`;
     $('price').textContent=money(d.price);$('symbol').textContent=`${d.config.symbol} · ${d.market_monitor?.source||'waiting'}`;$('equity').textContent=money(d.equity);
     const mm=d.market_monitor||{};
@@ -331,17 +380,29 @@ async function loadAll(showLoading=false){
     $('dailyPnl').innerHTML=`<span class="${cls(d.daily_realized_pnl)}">${money(d.daily_realized_pnl)}</span>`;$('dailyLimit').textContent=`Daily stop: ${money(d.daily_loss_limit_amount)} loss`;
     $('winRate').textContent=pct(d.performance.win_rate);$('tradeCount').textContent=`${d.performance.closed_trades} closed trades`;$('totalPnl').innerHTML=`<span class="${cls(d.performance.total_pnl)}">${money(d.performance.total_pnl)}</span>`;
     const pf=d.performance.profit_factor;$('profitFactor').textContent='Profit factor '+(pf===null?'—':(!Number.isFinite(Number(pf))?'∞':num(pf,2)));
-    renderDecision(d.last_cycle);renderRisk(d.last_cycle);renderExecution(d.last_cycle);renderPosition(d);renderLearning(d.learning);renderPerformance(d.performance);renderTrades(d.trades);renderConfig(d);drawChart(d.performance.equity_curve);$('raw').textContent=JSON.stringify(d.last_cycle,null,2);
+    const signalClose=Number(d.last_cycle?.signal_candle_close_time);
+    $('strategyCandleStatus').textContent=Number.isFinite(signalClose)?'Strategy candle '+new Date(signalClose).toLocaleString():'Strategy candle —';
+    renderConfig(d);renderDecision(d.last_cycle);renderRisk(d.last_cycle);renderExecution(d.last_execution);renderPosition(d);renderLearning(d.learning);renderPerformance(d.performance);renderTrades(d.trades);drawChart(d.performance.equity_curve);$('raw').textContent=JSON.stringify(d.last_cycle,null,2);
     $('updated').textContent='Updated '+new Date().toLocaleTimeString();
-  }catch(e){$('updated').textContent='Dashboard error: '+e.message}
-  finally{if(showLoading)setLoading(false)}
+  }catch(e){
+    if(e.name!=='AbortError'&&requestSeq===dashboardRequestSeq){
+      $('updated').textContent='Dashboard error: '+e.message;
+      markDashboardStale(e.message);
+    }
+  }finally{
+    if(requestSeq===dashboardRequestSeq){
+      dashboardLoading=false;
+      if(dashboardController===controller)dashboardController=null;
+      if(showLoading)setLoading(false);
+    }
+  }
 }
 $('candleInterval').addEventListener('change',()=>loadCandles(true));
 $('candleCount').addEventListener('change',()=>loadCandles(true));
 $('chartRefresh').addEventListener('click',()=>loadCandles(true));
 $('candleWrap').addEventListener('mousemove',showCandleTooltip);
 $('candleWrap').addEventListener('mouseleave',()=>{candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles()});
-loadAll(true).then(()=>{if(latestDashboard?.config?.interval&&$('candleInterval').querySelector(`option[value="${latestDashboard.config.interval}"]`))$('candleInterval').value=latestDashboard.config.interval;loadCandles(true)});
-setInterval(()=>loadAll(false),1000);setInterval(()=>loadCandles(false),5000);window.addEventListener('resize',()=>{drawChart(latestDashboard?.performance?.equity_curve||[]);drawCandles()});
+loadAll(true,true).then(()=>{if(latestDashboard?.config?.interval&&$('candleInterval').querySelector(`option[value="${latestDashboard.config.interval}"]`))$('candleInterval').value=latestDashboard.config.interval;loadCandles(true)});
+setInterval(()=>loadAll(false,false),1000);setInterval(()=>loadCandles(false),5000);setInterval(()=>{if(lastDashboardSuccessAt&&Date.now()-lastDashboardSuccessAt>5000)markDashboardStale('No successful dashboard update for more than 5 seconds')},1000);window.addEventListener('resize',()=>{drawChart(latestDashboard?.performance?.equity_curve||[]);drawCandles()});
 </script>
 </body></html>'''
