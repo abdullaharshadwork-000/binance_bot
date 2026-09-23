@@ -50,6 +50,7 @@ class TradingOrchestrator:
         self.strategy_task: asyncio.Task | None = None
         self.equity_task: asyncio.Task | None = None
         self.strategy_error: str | None = None
+        self.reconciliation_warning: str | None = None
         self.last_cycle: dict | None = None
 
         self._cycle_lock = asyncio.Lock()
@@ -84,6 +85,21 @@ class TradingOrchestrator:
             self.settings.base_asset,
             self.settings.quote_asset,
         )
+        reconciliation = await self.broker.reconcile_unresolved_orders()
+        unresolved = [
+            item for item in reconciliation
+            if not item.get("resolved", False)
+        ]
+        if unresolved:
+            ids = ", ".join(
+                str(item.get("client_order_id")) for item in unresolved
+            )
+            self.reconciliation_warning = (
+                "Unresolved Binance order outcome(s) require review before "
+                f"new orders can be submitted: {ids}"
+            )
+        else:
+            self.reconciliation_warning = None
         self._exchange_validated = True
 
     async def _on_price_tick(self, price: float, event_time_ms: int) -> None:
@@ -416,6 +432,7 @@ class TradingOrchestrator:
             "strategy_updated": strategy_updated and downstream_ok,
             "strategy_pending": self.pending_strategy_result is not None,
             "strategy_error": self.strategy_error,
+            "reconciliation_warning": self.reconciliation_warning,
             "price": price,
             "price_source": price_source,
             "price_age_ms": price_age_ms,
