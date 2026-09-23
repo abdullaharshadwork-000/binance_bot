@@ -265,14 +265,6 @@ class TradingOrchestrator:
             self.last_equity_update_monotonic = time.monotonic()
             return self.last_equity
 
-        now = time.monotonic()
-        due = (
-            self.last_equity is None
-            or self.last_equity_update_monotonic is None
-            or now - self.last_equity_update_monotonic
-            >= self.settings.account_refresh_seconds
-        )
-
         if self.equity_task is not None and self.equity_task.done():
             task = self.equity_task
             self.equity_task = None
@@ -283,6 +275,13 @@ class TradingOrchestrator:
                 # Keep the last known equity. Entry will remain blocked if none exists.
                 pass
 
+        now = time.monotonic()
+        due = (
+            self.last_equity is None
+            or self.last_equity_update_monotonic is None
+            or now - self.last_equity_update_monotonic
+            >= self.settings.account_refresh_seconds
+        )
         if due and self.equity_task is None:
             self.equity_task = asyncio.create_task(self.broker.equity(price))
 
