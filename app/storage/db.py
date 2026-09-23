@@ -408,7 +408,7 @@ class TradingDB:
                 """
                 SELECT * FROM orders
                 WHERE mode=? AND symbol=?
-                  AND status IN ('PENDING_SUBMIT','UNKNOWN','NEW','PARTIALLY_FILLED','PENDING_CANCEL')
+                  AND status IN ('PENDING_SUBMIT','UNKNOWN','NEW','PARTIALLY_FILLED','PENDING_CANCEL','RECOVERY_REQUIRED')
                 ORDER BY id ASC
                 """,
                 (mode, symbol),
