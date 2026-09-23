@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from app.config import Settings
@@ -25,18 +26,14 @@ class Broker:
     def _paper_base_dec(self) -> Decimal:
         return Decimal(str(self.db.get_state("paper_base_balance", "0") or "0"))
 
-    def _paper_quote(self) -> float:
-        return float(self._paper_quote_dec())
-
-    def _paper_base(self) -> float:
-        return float(self._paper_base_dec())
-
     async def equity(self, price: float) -> float:
         price_d = Decimal(str(price))
         if self.settings.mode == "paper":
             return float(self._paper_quote_dec() + self._paper_base_dec() * price_d)
 
-        balances = await self.exchange.asset_balances({self.settings.quote_asset, self.settings.base_asset})
+        balances = await self.exchange.asset_balances(
+            {self.settings.quote_asset, self.settings.base_asset}
+        )
         quote = Decimal(str(balances.get(self.settings.quote_asset, 0.0)))
         base = Decimal(str(balances.get(self.settings.base_asset, 0.0)))
         return float(quote + base * price_d)
@@ -56,15 +53,83 @@ class Broker:
             await self.exchange.normalize_price(self.settings.symbol, take),
         )
 
+    def _new_client_order_id(self, side: str) -> str:
+        # <= 36 chars and unique enough for local idempotency/reconciliation.
+        return f"agt-{side.lower()}-{uuid.uuid4().hex[:20]}"
+
+    async def _submit_market_order(self, side: str, qty: float) -> tuple[dict, str]:
+        client_order_id = self._new_client_order_id(side)
+        self.db.record_order_intent(
+            mode=self.settings.mode,
+            symbol=self.settings.symbol,
+            client_order_id=client_order_id,
+            side=side,
+            requested_quantity=qty,
+        )
+
+        try:
+            order = await self.exchange.market_order(
+                self.settings.symbol,
+                side,
+                qty,
+                client_order_id=client_order_id,
+            )
+        except Exception as submit_error:
+            # Never blindly re-submit after an uncertain network outcome. Query Binance
+            # by our idempotent client order id first.
+            try:
+                order = await self.exchange.get_order(
+                    self.settings.symbol,
+                    client_order_id=client_order_id,
+                )
+            except Exception as reconcile_error:
+                self.db.update_order_record(
+                    client_order_id=client_order_id,
+                    binance_order_id=None,
+                    executed_quantity=0.0,
+                    average_fill_price=None,
+                    status="UNKNOWN",
+                    commission_quote=0.0,
+                    commission_details=[],
+                )
+                raise RuntimeError(
+                    "Order outcome is uncertain. Automatic re-submission was blocked; "
+                    f"manual/restart reconciliation is required. Submit error: {submit_error}; "
+                    f"reconcile error: {reconcile_error}"
+                ) from submit_error
+
+        executed_qty = self.exchange.executed_quantity(order)
+        fill_price = self.exchange.weighted_fill_price(order, 0.0) if executed_qty > 0 else None
+        fee_quote = self.exchange.estimated_order_fee_quote(order, fill_price or 0.0)
+        details = self.exchange.commission_details(order)
+        self.db.update_order_record(
+            client_order_id=client_order_id,
+            binance_order_id=str(order.get("orderId")) if order.get("orderId") is not None else None,
+            executed_quantity=executed_qty,
+            average_fill_price=fill_price,
+            status=str(order.get("status") or "UNKNOWN"),
+            commission_quote=fee_quote,
+            commission_details=details,
+        )
+        return order, client_order_id
+
+    @staticmethod
+    def _base_commission(order: dict, base_asset: str) -> float:
+        total = Decimal("0")
+        for fill in order.get("fills") or []:
+            if str(fill.get("commissionAsset") or "") == base_asset:
+                total += Decimal(str(fill.get("commission") or "0"))
+        return float(total)
+
     async def enter(self, signal: StrategySignal, risk: RiskDecision, price: float) -> ExecutionResult:
         if not risk.allowed or risk.quantity <= 0:
             return ExecutionResult("BUY", False, risk.reason)
-        if self.db.get_open_trade(self.settings.symbol):
+        if self.db.get_open_trade(self.settings.symbol, self.settings.mode):
             return ExecutionResult("BUY", False, "Position already open")
 
         qty = await self.exchange.normalize_quantity(self.settings.symbol, risk.quantity, price)
         if qty <= 0:
-            return ExecutionResult("BUY", False, "Quantity is below Binance symbol minimums")
+            return ExecutionResult("BUY", False, "Quantity violates Binance market quantity/notional filters")
 
         if self.settings.mode == "paper":
             fill_price = self._paper_execution_price(price, "BUY")
@@ -74,12 +139,11 @@ class Broker:
             fee = price_d * qty_d * fee_rate
             cost = price_d * qty_d + fee
             quote = self._paper_quote_dec()
+            base = self._paper_base_dec()
             if cost > quote:
                 return ExecutionResult("BUY", False, "Insufficient paper quote balance")
 
             stop_price, take_profit_price = await self._risk_prices_from_fill(fill_price)
-            self.db.set_state("paper_quote_balance", quote - cost)
-            self.db.set_state("paper_base_balance", self._paper_base_dec() + qty_d)
             trade_id = self.db.open_trade(
                 mode=self.settings.mode,
                 symbol=self.settings.symbol,
@@ -89,6 +153,10 @@ class Broker:
                 reason=signal.reason,
                 stop_price=stop_price,
                 take_profit_price=take_profit_price,
+                state_updates={
+                    "paper_quote_balance": quote - cost,
+                    "paper_base_balance": base + qty_d,
+                },
             )
             return ExecutionResult(
                 "BUY",
@@ -107,14 +175,28 @@ class Broker:
         if self.settings.mode == "live" and not self.settings.allow_live_trading:
             return ExecutionResult("BUY", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
 
-        order = await self.exchange.market_order(self.settings.symbol, "BUY", qty)
+        order, client_order_id = await self._submit_market_order("BUY", qty)
+        executed_qty = self.exchange.executed_quantity(order)
+        if executed_qty <= 0:
+            return ExecutionResult(
+                "BUY",
+                False,
+                f"Binance order {client_order_id} did not report an executed quantity",
+                {"order": order},
+            )
+
         fill_price = self.exchange.weighted_fill_price(order, price)
         fee = self.exchange.estimated_order_fee_quote(order, fill_price)
+        base_commission = self._base_commission(order, self.settings.base_asset)
+        held_qty = max(0.0, executed_qty - base_commission)
+        if held_qty <= 0:
+            return ExecutionResult("BUY", False, "Executed buy left no usable base-asset quantity")
+
         stop_price, take_profit_price = await self._risk_prices_from_fill(fill_price)
         trade_id = self.db.open_trade(
             mode=self.settings.mode,
             symbol=self.settings.symbol,
-            quantity=qty,
+            quantity=held_qty,
             entry_price=fill_price,
             entry_fee=fee,
             reason=signal.reason,
@@ -124,12 +206,22 @@ class Broker:
         return ExecutionResult(
             "BUY",
             True,
-            "Binance market buy submitted",
-            {"trade_id": trade_id, "fill_price": fill_price, "entry_fee_estimate": fee, "order": order},
+            "Binance market buy executed",
+            {
+                "trade_id": trade_id,
+                "client_order_id": client_order_id,
+                "requested_qty": qty,
+                "executed_qty": executed_qty,
+                "recorded_position_qty": held_qty,
+                "fill_price": fill_price,
+                "entry_fee_quote": fee,
+                "commissions": self.exchange.commission_details(order),
+                "order": order,
+            },
         )
 
     async def maybe_exit(self, signal: StrategySignal, price: float) -> ExecutionResult:
-        trade = self.db.get_open_trade(self.settings.symbol)
+        trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
         if not trade:
             return ExecutionResult("HOLD", True, "No open position")
 
@@ -151,15 +243,19 @@ class Broker:
             qty_d = Decimal(str(qty))
             fee_rate = Decimal(str(self.settings.trading_fee_bps)) / Decimal("10000")
             fee = price_d * qty_d * fee_rate
-            self.db.set_state(
-                "paper_quote_balance",
-                self._paper_quote_dec() + (price_d * qty_d - fee),
+            quote = self._paper_quote_dec()
+            base = self._paper_base_dec()
+            closed = self.db.close_trade(
+                int(trade["id"]),
+                float(price_d),
+                float(fee),
+                reason,
+                executed_quantity=float(qty_d),
+                state_updates={
+                    "paper_quote_balance": quote + (price_d * qty_d - fee),
+                    "paper_base_balance": max(Decimal("0"), base - qty_d),
+                },
             )
-            self.db.set_state(
-                "paper_base_balance",
-                max(Decimal("0"), self._paper_base_dec() - qty_d),
-            )
-            closed = self.db.close_trade(int(trade["id"]), float(price_d), float(fee), reason)
             return ExecutionResult(
                 "SELL",
                 True,
@@ -177,18 +273,44 @@ class Broker:
             return ExecutionResult("SELL", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
 
         available = await self.exchange.asset_balance(self.settings.base_asset)
-        qty = min(qty, available)
-        qty = await self.exchange.normalize_quantity(self.settings.symbol, qty, price)
-        if qty <= 0:
-            return ExecutionResult("SELL", False, "Sell quantity is below Binance symbol minimums")
+        requested_qty = min(qty, available)
+        normalized_qty = await self.exchange.normalize_quantity(
+            self.settings.symbol, requested_qty, price
+        )
+        if normalized_qty <= 0:
+            return ExecutionResult("SELL", False, "Sell quantity violates Binance market filters")
 
-        order = await self.exchange.market_order(self.settings.symbol, "SELL", qty)
+        order, client_order_id = await self._submit_market_order("SELL", normalized_qty)
+        executed_qty = self.exchange.executed_quantity(order)
+        if executed_qty <= 0:
+            return ExecutionResult(
+                "SELL",
+                False,
+                f"Binance order {client_order_id} did not report an executed quantity",
+                {"order": order},
+            )
+
         fill_price = self.exchange.weighted_fill_price(order, price)
         fee = self.exchange.estimated_order_fee_quote(order, fill_price)
-        closed = self.db.close_trade(int(trade["id"]), fill_price, fee, reason)
+        closed = self.db.close_trade(
+            int(trade["id"]),
+            fill_price,
+            fee,
+            reason,
+            executed_quantity=executed_qty,
+        )
         return ExecutionResult(
             "SELL",
             True,
-            "Binance market sell submitted",
-            {"trade": closed, "fill_price": fill_price, "exit_fee_estimate": fee, "order": order},
+            "Binance market sell executed",
+            {
+                "trade": closed,
+                "client_order_id": client_order_id,
+                "requested_qty": normalized_qty,
+                "executed_qty": executed_qty,
+                "fill_price": fill_price,
+                "exit_fee_quote": fee,
+                "commissions": self.exchange.commission_details(order),
+                "order": order,
+            },
         )
