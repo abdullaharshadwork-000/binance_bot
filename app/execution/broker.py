@@ -124,6 +124,12 @@ class Broker:
     async def enter(self, signal: StrategySignal, risk: RiskDecision, price: float) -> ExecutionResult:
         if not risk.allowed or risk.quantity <= 0:
             return ExecutionResult("BUY", False, risk.reason)
+        if self.db.has_unresolved_order(mode=self.settings.mode, symbol=self.settings.symbol):
+            return ExecutionResult(
+                "BUY",
+                False,
+                "An earlier Binance order has an unresolved outcome; new entries are blocked",
+            )
         if self.db.get_open_trade(self.settings.symbol, self.settings.mode):
             return ExecutionResult("BUY", False, "Position already open")
 
@@ -224,6 +230,12 @@ class Broker:
         trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
         if not trade:
             return ExecutionResult("HOLD", True, "No open position")
+        if self.db.has_unresolved_order(mode=self.settings.mode, symbol=self.settings.symbol):
+            return ExecutionResult(
+                "HOLD",
+                False,
+                "An earlier Binance order has an unresolved outcome; duplicate exit submission is blocked",
+            )
 
         reason = None
         if price <= float(trade["stop_price"]):
