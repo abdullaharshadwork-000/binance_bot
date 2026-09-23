@@ -1,13 +1,15 @@
+import time
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from app.agents.orchestrator import TradingOrchestrator
-from app.config import get_settings
+from app.config import SUPPORTED_INTERVALS, get_settings
 from app.ui.dashboard import DASHBOARD_HTML
 
 settings = get_settings()
 bot = TradingOrchestrator(settings)
-app = FastAPI(title="Agentic Binance Bot", version="0.4.0")
+app = FastAPI(title="Agentic Binance Bot", version="0.5.0")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -25,33 +27,47 @@ async def _dashboard_payload() -> dict:
     price = market_monitor.get("price")
     market_error = None
 
-    # When the engine is stopped there may be no stream yet. One REST read lets the
-    # dashboard still display the real market price without creating a polling loop.
-    if price is None:
+    stale_limit_ms = settings.market_data_stale_seconds * 1000
+    needs_rest_price = (
+        price is None
+        or market_monitor.get("price_age_ms") is None
+        or float(market_monitor.get("price_age_ms") or 0) > stale_limit_ms
+    )
+
+    # When stopped, keep the dashboard price fresh without hammering Binance:
+    # the refreshed REST price is cached in the orchestrator and reused until stale.
+    if needs_rest_price:
         try:
             price = await bot.exchange.ticker_price(settings.symbol)
-            market_monitor = {
-                **market_monitor,
-                "price": price,
-                "source": "rest-dashboard",
-                "price_age_ms": 0.0,
-            }
+            now_ms = int(time.time() * 1000)
+            bot.latest_price = price
+            bot.latest_price_event_ms = now_ms
+            bot.latest_price_received_monotonic = time.monotonic()
+            bot.latest_price_source = "rest-dashboard"
+            market_monitor = bot.market_snapshot()
         except Exception as exc:
             market_error = str(exc)
 
-    open_trade = bot.db.get_open_trade(settings.symbol)
+    open_trade = bot.db.get_open_trade(
+        settings.symbol,
+        settings.mode,
+    )
+
     equity = bot.last_equity
     if price is not None:
         try:
-            if settings.mode == "paper":
-                equity = await bot.broker.equity(price)
-            elif equity is None and not bot.running:
-                equity = await bot.broker.equity(price)
+            equity = await bot._poll_equity(price)
         except Exception as exc:
             market_error = market_error or str(exc)
 
-    daily_pnl = bot.db.realized_pnl_today()
-    performance = bot.db.performance_summary()
+    daily_pnl = bot.db.realized_pnl_today(
+        mode=settings.mode,
+        symbol=settings.symbol,
+    )
+    performance = bot.db.performance_summary(
+        mode=settings.mode,
+        symbol=settings.symbol,
+    )
     learning = bot.learning.load().__dict__
 
     open_trade_metrics = None
@@ -66,11 +82,23 @@ async def _dashboard_payload() -> dict:
             "unrealized_pnl": unrealized,
             "unrealized_pnl_pct": unrealized / cost if cost > 0 else 0.0,
             "estimated_exit_fee": estimated_exit_fee,
-            "distance_to_stop_pct": (price - float(open_trade["stop_price"])) / price if price else None,
-            "distance_to_take_profit_pct": (float(open_trade["take_profit_price"]) - price) / price if price else None,
+            "distance_to_stop_pct": (
+                (price - float(open_trade["stop_price"])) / price
+                if price else None
+            ),
+            "distance_to_take_profit_pct": (
+                (float(open_trade["take_profit_price"]) - price) / price
+                if price else None
+            ),
         }
 
-    daily_limit_amount = (equity * settings.max_daily_loss_fraction) if equity is not None else None
+    daily_limit_amount = (
+        equity * settings.max_daily_loss_fraction
+        if equity is not None else None
+    )
+    engine_error = None
+    if isinstance(bot.last_cycle, dict):
+        engine_error = bot.last_cycle.get("error") or bot.last_cycle.get("strategy_error")
 
     return {
         "running": bot.running,
@@ -79,16 +107,23 @@ async def _dashboard_payload() -> dict:
         "daily_realized_pnl": daily_pnl,
         "daily_loss_limit_amount": daily_limit_amount,
         "market_error": market_error,
+        "engine_error": engine_error,
         "market_monitor": market_monitor,
         "open_trade": open_trade,
         "open_trade_metrics": open_trade_metrics,
         "last_cycle": bot.last_cycle,
         "learning": learning,
         "performance": performance,
-        "trades": bot.db.list_trades(20),
+        "trades": bot.db.list_trades(
+            20,
+            mode=settings.mode,
+            symbol=settings.symbol,
+        ),
         "config": {
             "mode": settings.mode,
-            "live_orders_allowed": settings.mode == "live" and settings.allow_live_trading,
+            "live_orders_allowed": (
+                settings.mode == "live" and settings.allow_live_trading
+            ),
             "symbol": settings.symbol,
             "interval": settings.interval,
             "cycle_seconds": settings.cycle_seconds,
@@ -131,6 +166,7 @@ async def status():
         "open_trade": data["open_trade"],
         "last_cycle": data["last_cycle"],
         "learning": data["learning"],
+        "engine_error": data["engine_error"],
     }
 
 
@@ -139,12 +175,15 @@ async def run_once():
     try:
         return await bot.run_once()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/bot/start")
 async def start_bot():
-    started = bot.start()
+    try:
+        started = await bot.start()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "started": started,
         "running": bot.running,
@@ -165,9 +204,8 @@ async def stop_bot():
 
 @app.get("/market/candles")
 async def market_candles(interval: str | None = None, limit: int = 120):
-    allowed_intervals = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"}
     selected = interval or settings.interval
-    if selected not in allowed_intervals:
+    if selected not in SUPPORTED_INTERVALS:
         raise HTTPException(status_code=400, detail="Unsupported candle interval")
     limit = max(30, min(limit, 300))
     try:
@@ -191,7 +229,11 @@ async def market_candles(interval: str | None = None, limit: int = 120):
         "symbol": settings.symbol,
         "interval": selected,
         "mode": settings.mode,
-        "market_source": "Binance Spot Testnet" if settings.mode == "testnet" else "Binance Spot",
+        "market_source": (
+            "Binance Spot Testnet"
+            if settings.mode == "testnet"
+            else "Binance Spot"
+        ),
         "candles": candles,
     }
 
@@ -199,4 +241,8 @@ async def market_candles(interval: str | None = None, limit: int = 120):
 @app.get("/trades")
 async def trades(limit: int = 100):
     limit = max(1, min(limit, 500))
-    return bot.db.list_trades(limit)
+    return bot.db.list_trades(
+        limit,
+        mode=settings.mode,
+        symbol=settings.symbol,
+    )
