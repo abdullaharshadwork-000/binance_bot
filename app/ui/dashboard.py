@@ -71,6 +71,17 @@ DASHBOARD_HTML = r'''<!doctype html>
     <div class="card"><div class="metric-label">Market feed</div><div class="metric-value" id="feedStatus">—</div><div class="metric-note" id="feedAge">Waiting for price stream</div></div>
   </div>
 
+  <div class="card" style="margin-bottom:14px">
+    <div class="market-head">
+      <div>
+        <h2 style="margin-bottom:0">Multi-Symbol Signal Monitor</h2>
+        <div class="market-title-note">All configured markets are evaluated independently. Portfolio limits still cap simultaneous open positions.</div>
+      </div>
+      <div class="chart-status"><span id="portfolioStatus">Portfolio —</span></div>
+    </div>
+    <div class="table-wrap" id="symbolOverview"><span class="muted">Loading configured markets…</span></div>
+  </div>
+
   <div class="card market-card">
     <div class="market-head">
       <div>
@@ -285,6 +296,21 @@ async function act(url,msg){
   finally{setLoading(false)}
 }
 
+function renderSymbolOverview(items,portfolio){
+  const rows=Array.isArray(items)?items:[];
+  if(!rows.length){
+    $('symbolOverview').innerHTML='<span class="muted">No configured markets.</span>';
+    return;
+  }
+  $('portfolioStatus').textContent=`Open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · daily P/L ${money(portfolio?.daily_realized_pnl)}`;
+  const body=rows.map(item=>{
+    const risk=item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
+    const status=item.error?badge('ERROR','red'):item.running?badge('RUNNING','green'):badge('STOPPED','amber');
+    return `<tr><td><b>${esc(item.symbol)}</b></td><td>${sideBadge(item.signal)}</td><td>${pct(item.confidence)}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price===null||item.price===undefined?'—':num(item.price,4)}</td><td>${status}</td></tr>`;
+  }).join('');
+  $('symbolOverview').innerHTML=`<table><thead><tr><th>Market</th><th>Signal</th><th>Confidence</th><th>Entry Gate</th><th>Position</th><th>Price</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function renderDecision(cycle){
   if(!cycle?.signal){$('decision').innerHTML='<span class="muted">No market decision yet.</span>';return}
   const s=cycle.signal, f=s.features||{}, threshold=cycle.learning?.confidence_threshold;
@@ -382,7 +408,7 @@ async function loadAll(showLoading=false,force=false){
     const pf=d.performance.profit_factor;$('profitFactor').textContent='Profit factor '+(pf===null?'—':(!Number.isFinite(Number(pf))?'∞':num(pf,2)));
     const signalClose=Number(d.last_cycle?.signal_candle_close_time);
     $('strategyCandleStatus').textContent=Number.isFinite(signalClose)?'Strategy candle '+new Date(signalClose).toLocaleString():'Strategy candle —';
-    renderConfig(d);renderDecision(d.last_cycle);renderRisk(d.last_cycle);renderExecution(d.last_execution);renderPosition(d);renderLearning(d.learning);renderPerformance(d.performance);renderTrades(d.trades);drawChart(d.performance.equity_curve);$('raw').textContent=JSON.stringify(d.last_cycle,null,2);
+    renderConfig(d);renderSymbolOverview(d.symbol_overview,d.portfolio);renderDecision(d.last_cycle);renderRisk(d.last_cycle);renderExecution(d.last_execution);renderPosition(d);renderLearning(d.learning);renderPerformance(d.performance);renderTrades(d.trades);drawChart(d.performance.equity_curve);$('raw').textContent=JSON.stringify(d.last_cycle,null,2);
     $('updated').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){
     if(e.name!=='AbortError'&&requestSeq===dashboardRequestSeq){
