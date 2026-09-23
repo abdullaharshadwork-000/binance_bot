@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     symbol: str = "BTCUSDT"
     base_asset: str = "BTC"
     quote_asset: str = "USDT"
+
+    # Optional comma-separated symbols sharing QUOTE_ASSET.
+    # Example: BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT
+    symbols: str = ""
+    max_concurrent_positions: int = Field(default=2, ge=1, le=10)
+    allow_multi_symbol_live: bool = False
+
     interval: str = "15m"
 
     # Fast market/risk loop. Strategy still uses completed candles only.
@@ -60,6 +67,16 @@ class Settings(BaseSettings):
         self.base_asset = self.base_asset.strip().upper()
         self.quote_asset = self.quote_asset.strip().upper()
         self.interval = self.interval.strip()
+        parsed_symbols = self.trading_symbols
+
+        if parsed_symbols:
+            self.symbol = parsed_symbols[0]
+            derived_base = self.base_for_symbol(self.symbol)
+            if derived_base is None:
+                raise ValueError(
+                    f"Primary symbol {self.symbol} must end with QUOTE_ASSET={self.quote_asset}"
+                )
+            self.base_asset = derived_base
 
         if self.interval not in SUPPORTED_INTERVALS:
             raise ValueError(
@@ -68,6 +85,19 @@ class Settings(BaseSettings):
             )
         if self.base_asset == self.quote_asset:
             raise ValueError("BASE_ASSET and QUOTE_ASSET must be different")
+
+        for symbol in parsed_symbols:
+            if self.base_for_symbol(symbol) is None:
+                raise ValueError(
+                    f"Multi-symbol entry {symbol} must end with QUOTE_ASSET={self.quote_asset}"
+                )
+
+        if len(parsed_symbols) > 1 and self.mode == "live" and not self.allow_multi_symbol_live:
+            raise ValueError(
+                "Multi-symbol live trading is blocked. Keep ALLOW_MULTI_SYMBOL_LIVE=false "
+                "until the multi-symbol engine has been validated in Testnet."
+            )
+
         if self.mode in {"testnet", "live"} and not (
             self.binance_api_key and self.binance_api_secret
         ):
@@ -75,6 +105,28 @@ class Settings(BaseSettings):
                 "BINANCE_API_KEY and BINANCE_API_SECRET are required for testnet/live mode"
             )
         return self
+
+    @property
+    def trading_symbols(self) -> list[str]:
+        raw = self.symbols.strip()
+        values = [self.symbol] if not raw else raw.split(",")
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            symbol = value.strip().upper()
+            if not symbol or symbol in seen:
+                continue
+            result.append(symbol)
+            seen.add(symbol)
+        return result
+
+    def base_for_symbol(self, symbol: str) -> str | None:
+        symbol = symbol.strip().upper()
+        quote = self.quote_asset.strip().upper()
+        if not quote or not symbol.endswith(quote):
+            return None
+        base = symbol[: -len(quote)]
+        return base or None
 
     def ensure_directories(self) -> None:
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
