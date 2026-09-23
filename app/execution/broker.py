@@ -113,6 +113,70 @@ class Broker:
         )
         return order, client_order_id
 
+    async def reconcile_unresolved_orders(self) -> list[dict]:
+        """Re-check uncertain exchange orders without ever blindly resubmitting them."""
+        if self.settings.mode == "paper":
+            return []
+
+        results = []
+        for record in self.db.unresolved_orders(
+            mode=self.settings.mode,
+            symbol=self.settings.symbol,
+        ):
+            client_order_id = str(record["client_order_id"])
+            try:
+                order = await self.exchange.get_order(
+                    self.settings.symbol,
+                    client_order_id=client_order_id,
+                )
+            except Exception as exc:
+                results.append({
+                    "client_order_id": client_order_id,
+                    "status": record["status"],
+                    "resolved": False,
+                    "error": str(exc),
+                })
+                continue
+
+            executed_qty = self.exchange.executed_quantity(order)
+            raw_status = str(order.get("status") or "UNKNOWN")
+            fill_price = (
+                self.exchange.weighted_fill_price(order, 0.0)
+                if executed_qty > 0 else None
+            )
+
+            if executed_qty > 0 and record["status"] in {
+                "PENDING_SUBMIT", "UNKNOWN", "NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"
+            }:
+                # We intentionally do not invent/reconstruct a position from incomplete
+                # order history. Block further trading until a human reviews it.
+                stored_status = "RECOVERY_REQUIRED"
+            else:
+                stored_status = raw_status
+
+            self.db.update_order_record(
+                client_order_id=client_order_id,
+                binance_order_id=(
+                    str(order.get("orderId"))
+                    if order.get("orderId") is not None else None
+                ),
+                executed_quantity=executed_qty,
+                average_fill_price=fill_price,
+                status=stored_status,
+                commission_quote=float(record.get("commission_quote") or 0.0),
+                commission_details=[],
+            )
+            results.append({
+                "client_order_id": client_order_id,
+                "status": stored_status,
+                "resolved": stored_status not in {
+                    "PENDING_SUBMIT", "UNKNOWN", "NEW", "PARTIALLY_FILLED",
+                    "PENDING_CANCEL", "RECOVERY_REQUIRED",
+                },
+                "executed_quantity": executed_qty,
+            })
+        return results
+
     @staticmethod
     def _base_commission(order: dict, base_asset: str) -> float:
         total = Decimal("0")
