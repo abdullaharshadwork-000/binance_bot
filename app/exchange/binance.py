@@ -263,6 +263,54 @@ class BinanceClient:
             if Decimal(str(fill.get("commission") or "0")) > 0
         ]
 
+    async def order_fee_quote(self, order: dict, fill_price: float) -> float:
+        """Convert fill commissions to quote currency, including third-asset fees when possible."""
+        fills = order.get("fills") or []
+        if not fills:
+            return self.estimated_order_fee_quote(order, fill_price)
+
+        total = Decimal("0")
+        saw_commission_field = False
+        for fill in fills:
+            if "commission" not in fill:
+                continue
+            saw_commission_field = True
+            commission = Decimal(str(fill.get("commission") or "0"))
+            if commission <= 0:
+                continue
+
+            asset = str(fill.get("commissionAsset") or "")
+            if asset == self.settings.quote_asset:
+                total += commission
+                continue
+            if asset == self.settings.base_asset:
+                total += commission * Decimal(str(fill.get("price") or fill_price))
+                continue
+
+            # Third-asset commissions (for example BNB) are valued using the
+            # closest direct quote pair available. If neither pair exists, leave
+            # the fee unconverted but preserve it in commission_details().
+            try:
+                conversion = Decimal(
+                    str(await self.ticker_price(f"{asset}{self.settings.quote_asset}"))
+                )
+                total += commission * conversion
+                continue
+            except Exception:
+                pass
+            try:
+                inverse = Decimal(
+                    str(await self.ticker_price(f"{self.settings.quote_asset}{asset}"))
+                )
+                if inverse > 0:
+                    total += commission / inverse
+            except Exception:
+                pass
+
+        if saw_commission_field:
+            return float(total)
+        return self.estimated_order_fee_quote(order, fill_price)
+
     def estimated_order_fee_quote(self, order: dict, fill_price: float) -> float:
         """Best-effort fee in quote currency. Third-asset fees remain recorded separately."""
         fills = order.get("fills") or []
