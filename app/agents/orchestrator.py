@@ -52,6 +52,7 @@ class TradingOrchestrator:
         self.strategy_error: str | None = None
         self.reconciliation_warning: str | None = None
         self.last_cycle: dict | None = None
+        self.last_execution: dict | None = None
 
         self._cycle_lock = asyncio.Lock()
         self._control_lock = asyncio.Lock()
@@ -423,6 +424,12 @@ class TradingOrchestrator:
         else:
             signal = self.cached_signal or candidate_signal
 
+        if execution is not None and execution.action in {"BUY", "SELL"}:
+            self.last_execution = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                **execution.__dict__,
+            }
+
         result = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "mode": self.settings.mode,
@@ -468,6 +475,93 @@ class TradingOrchestrator:
     async def _cycle(self, force_strategy: bool = False) -> dict:
         async with self._cycle_lock:
             return await self._cycle_unlocked(force_strategy=force_strategy)
+
+    async def analyze_once(self) -> dict:
+        """Run a read-only market analysis without submitting or closing orders."""
+        async with self._control_lock:
+            if self.running:
+                raise RuntimeError(
+                    "Read-only analysis is disabled while the automated bot is running"
+                )
+            if self._manual_cycle_active:
+                raise RuntimeError("Another manual operation is already running")
+            self._manual_cycle_active = True
+
+        try:
+            await self._ensure_exchange_config()
+            price, price_source, price_age_ms = await self._market_price()
+            candidate = await self._compute_strategy(force=True)
+            if candidate is None:
+                raise RuntimeError("No completed candle was available for analysis")
+
+            signal = candidate["signal"]
+            profile = self.learning.load()
+            open_trade = self.db.get_open_trade(
+                self.settings.symbol,
+                self.settings.mode,
+            )
+            equity = await self.broker.equity(price)
+            daily_pnl = self.db.realized_pnl_today(
+                mode=self.settings.mode,
+                symbol=self.settings.symbol,
+            )
+
+            risk_decision: RiskDecision | None = None
+            if open_trade is None:
+                risk_decision = self.risk.evaluate_entry(
+                    signal=signal,
+                    price=price,
+                    equity=equity,
+                    daily_realized_pnl=daily_pnl,
+                    threshold=max(
+                        self.settings.min_signal_confidence,
+                        profile.confidence_threshold,
+                    ),
+                    risk_multiplier=profile.risk_multiplier,
+                )
+
+            result = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mode": self.settings.mode,
+                "symbol": self.settings.symbol,
+                "interval": self.settings.interval,
+                "read_only": True,
+                "signal_candle_close_time": int(candidate["candle_close_time"]),
+                "strategy_updated": True,
+                "strategy_pending": False,
+                "strategy_error": None,
+                "reconciliation_warning": self.reconciliation_warning,
+                "price": price,
+                "price_source": price_source,
+                "price_age_ms": price_age_ms,
+                "signal_price": float(candidate["signal_price"]),
+                "equity": equity,
+                "daily_realized_pnl": daily_pnl,
+                "market_monitor": self.market_snapshot(),
+                "signal": {
+                    "side": signal.side.value,
+                    "confidence": round(signal.confidence, 4),
+                    "reason": signal.reason,
+                    "features": signal.features,
+                },
+                "llm": {
+                    "adjustment": float(candidate["llm_adjustment"]),
+                    "reason": str(candidate["llm_reason"]),
+                },
+                "learning": profile.__dict__,
+                "risk": risk_decision.__dict__ if risk_decision else None,
+                "execution": {
+                    "action": "NONE",
+                    "success": True,
+                    "message": "Read-only analysis; no order was submitted",
+                },
+                "open_trade": open_trade,
+            }
+            self.last_cycle = result
+            return result
+        finally:
+            async with self._control_lock:
+                self._manual_cycle_active = False
 
     async def run_once(self) -> dict:
         async with self._control_lock:
