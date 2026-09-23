@@ -5,6 +5,12 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+SUPPORTED_INTERVALS = {
+    "1m", "3m", "5m", "15m", "30m",
+    "1h", "2h", "4h", "6h", "8h", "12h",
+    "1d", "3d", "1w",
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -49,9 +55,25 @@ class Settings(BaseSettings):
     learning_profile_path: str = "data/learning_profile.json"
 
     @model_validator(mode="after")
-    def validate_credentials(self):
-        if self.mode in {"testnet", "live"} and not (self.binance_api_key and self.binance_api_secret):
-            raise ValueError("BINANCE_API_KEY and BINANCE_API_SECRET are required for testnet/live mode")
+    def validate_runtime_settings(self):
+        self.symbol = self.symbol.strip().upper()
+        self.base_asset = self.base_asset.strip().upper()
+        self.quote_asset = self.quote_asset.strip().upper()
+        self.interval = self.interval.strip()
+
+        if self.interval not in SUPPORTED_INTERVALS:
+            raise ValueError(
+                f"Unsupported INTERVAL={self.interval}. Supported values: "
+                + ", ".join(sorted(SUPPORTED_INTERVALS))
+            )
+        if self.base_asset == self.quote_asset:
+            raise ValueError("BASE_ASSET and QUOTE_ASSET must be different")
+        if self.mode in {"testnet", "live"} and not (
+            self.binance_api_key and self.binance_api_secret
+        ):
+            raise ValueError(
+                "BINANCE_API_KEY and BINANCE_API_SECRET are required for testnet/live mode"
+            )
         return self
 
     def ensure_directories(self) -> None:
