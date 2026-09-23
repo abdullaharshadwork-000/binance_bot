@@ -100,7 +100,7 @@ class Broker:
 
         executed_qty = self.exchange.executed_quantity(order)
         fill_price = self.exchange.weighted_fill_price(order, 0.0) if executed_qty > 0 else None
-        fee_quote = self.exchange.estimated_order_fee_quote(order, fill_price or 0.0)
+        fee_quote = await self.exchange.order_fee_quote(order, fill_price or 0.0)
         details = self.exchange.commission_details(order)
         self.db.update_order_record(
             client_order_id=client_order_id,
@@ -256,7 +256,7 @@ class Broker:
             )
 
         fill_price = self.exchange.weighted_fill_price(order, price)
-        fee = self.exchange.estimated_order_fee_quote(order, fill_price)
+        fee = await self.exchange.order_fee_quote(order, fill_price)
         base_commission = self._base_commission(order, self.settings.base_asset)
         held_qty = max(0.0, executed_qty - base_commission)
         if held_qty <= 0:
@@ -367,7 +367,7 @@ class Broker:
             )
 
         fill_price = self.exchange.weighted_fill_price(order, price)
-        fee = self.exchange.estimated_order_fee_quote(order, fill_price)
+        fee = await self.exchange.order_fee_quote(order, fill_price)
         closed = self.db.close_trade(
             int(trade["id"]),
             fill_price,
