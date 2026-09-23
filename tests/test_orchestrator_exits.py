@@ -20,6 +20,7 @@ def make_bot(tmp_path):
         learning_profile_path=str(tmp_path / "learning.json"),
     )
     bot = TradingOrchestrator(settings)
+    bot._exchange_validated = True
     bot._market_price = AsyncMock(return_value=(100.0, "test", 0.0))
     return bot
 
