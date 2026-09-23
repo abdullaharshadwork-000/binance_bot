@@ -161,7 +161,11 @@ const esc = v => String(v??'—').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;'
 const badge = (text,type='blue') => `<span class="badge badge-${type}">${esc(text)}</span>`;
 function sideBadge(side){ side=String(side||'HOLD').toUpperCase(); return badge(side,side==='BUY'?'green':side==='SELL'?'red':'amber'); }
 function row(k,v){return `<div class="row"><span class="key">${k}</span><span class="val">${v}</span></div>`}
-function setLoading(on){document.querySelectorAll('.action').forEach(b=>b.disabled=on);document.body.classList.toggle('loading',on)}
+function setLoading(on){
+  document.querySelectorAll('.action').forEach(b=>b.disabled=on);
+  if(!on&&latestDashboard?.running&&$('analyzeBtn'))$('analyzeBtn').disabled=true;
+  document.body.classList.toggle('loading',on)
+}
 
 let candleData=[];
 let candleMeta={};
