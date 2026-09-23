@@ -1,0 +1,20 @@
+# Virtual environment
+.venv/
+
+# Environment secrets
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Pytest cache / temp folders
+.pytest_cache/
+.pytest_tmp/
+.pytest_audit_review/
+.pytest_exit_checks/
+.pytest_exit_checks_final/
+
+# Local data / databases
+data/
+*.db
