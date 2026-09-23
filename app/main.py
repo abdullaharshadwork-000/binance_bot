@@ -97,9 +97,14 @@ async def _dashboard_payload() -> dict:
         equity * settings.max_daily_loss_fraction
         if equity is not None else None
     )
-    engine_error = None
+    engine_error = bot.reconciliation_warning
     if isinstance(bot.last_cycle, dict):
-        engine_error = bot.last_cycle.get("error") or bot.last_cycle.get("strategy_error")
+        engine_error = (
+            engine_error
+            or bot.last_cycle.get("error")
+            or bot.last_cycle.get("reconciliation_warning")
+            or bot.last_cycle.get("strategy_error")
+        )
 
     return {
         "running": bot.running,
