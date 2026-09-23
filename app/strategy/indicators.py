@@ -10,9 +10,18 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+
     rs = gain / loss.replace(0, np.nan)
     out = 100 - (100 / (1 + rs))
-    return out.fillna(50)
+
+    only_gains = (gain > 0) & (loss == 0)
+    only_losses = (loss > 0) & (gain == 0)
+    flat = (gain == 0) & (loss == 0)
+
+    out = out.where(~only_gains, 100.0)
+    out = out.where(~only_losses, 0.0)
+    out = out.where(~flat, 50.0)
+    return out.fillna(50.0)
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
