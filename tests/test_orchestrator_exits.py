@@ -180,3 +180,34 @@ def test_manual_cycle_is_rejected_while_bot_is_running(tmp_path):
         await bot.exchange.close()
 
     asyncio.run(scenario())
+
+
+def test_read_only_analysis_never_submits_or_closes_orders(tmp_path):
+    async def scenario():
+        bot = make_bot(tmp_path)
+        candidate = {
+            "signal": StrategySignal(SignalSide.BUY, 0.95, "Strong read-only signal"),
+            "candle_close_time": 123,
+            "signal_price": 101.0,
+            "llm_adjustment": 0.0,
+            "llm_reason": "Not requested",
+        }
+        bot._compute_strategy = AsyncMock(return_value=candidate)
+        bot.broker.equity = AsyncMock(return_value=1000.0)
+        bot.broker.enter = AsyncMock()
+        bot.broker.maybe_exit = AsyncMock()
+
+        try:
+            result = await bot.analyze_once()
+
+            assert result["read_only"] is True
+            assert result["signal"]["side"] == "BUY"
+            assert result["risk"]["allowed"] is True
+            assert result["execution"]["action"] == "NONE"
+            assert "no order" in result["execution"]["message"].lower()
+            bot.broker.enter.assert_not_awaited()
+            bot.broker.maybe_exit.assert_not_awaited()
+        finally:
+            await bot.exchange.close()
+
+    asyncio.run(scenario())
