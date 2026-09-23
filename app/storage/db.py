@@ -401,3 +401,19 @@ class TradingDB:
                 (client_order_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def unresolved_orders(self, *, mode: str, symbol: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM orders
+                WHERE mode=? AND symbol=?
+                  AND status IN ('PENDING_SUBMIT','UNKNOWN','NEW','PARTIALLY_FILLED','PENDING_CANCEL','RECOVERY_REQUIRED')
+                ORDER BY id ASC
+                """,
+                (mode, symbol),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def has_unresolved_order(self, *, mode: str, symbol: str) -> bool:
+        return bool(self.unresolved_orders(mode=mode, symbol=symbol))

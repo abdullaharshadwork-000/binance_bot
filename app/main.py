@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from app.agents.orchestrator import TradingOrchestrator
 from app.config import SUPPORTED_INTERVALS, get_settings
+from app.strategy.indicators import ema
 from app.ui.dashboard import DASHBOARD_HTML
 
 settings = get_settings()
@@ -96,9 +97,14 @@ async def _dashboard_payload() -> dict:
         equity * settings.max_daily_loss_fraction
         if equity is not None else None
     )
-    engine_error = None
+    engine_error = bot.reconciliation_warning
     if isinstance(bot.last_cycle, dict):
-        engine_error = bot.last_cycle.get("error") or bot.last_cycle.get("strategy_error")
+        engine_error = (
+            engine_error
+            or bot.last_cycle.get("error")
+            or bot.last_cycle.get("reconciliation_warning")
+            or bot.last_cycle.get("strategy_error")
+        )
 
     return {
         "running": bot.running,
@@ -208,10 +214,16 @@ async def market_candles(interval: str | None = None, limit: int = 120):
     if selected not in SUPPORTED_INTERVALS:
         raise HTTPException(status_code=400, detail="Unsupported candle interval")
     limit = max(30, min(limit, 300))
+    history_limit = max(250, limit)
     try:
-        frame = await bot.exchange.klines(settings.symbol, selected, limit)
+        frame = await bot.exchange.klines(settings.symbol, selected, history_limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    frame = frame.copy()
+    frame["ema_fast"] = ema(frame["close"], 20)
+    frame["ema_slow"] = ema(frame["close"], 50)
+    frame = frame.tail(limit)
 
     candles = []
     for row in frame.to_dict(orient="records"):
@@ -223,6 +235,14 @@ async def market_candles(interval: str | None = None, limit: int = 120):
             "low": float(row["low"]),
             "close": float(row["close"]),
             "volume": float(row["volume"]),
+            "ema_fast": (
+                float(row["ema_fast"])
+                if row["ema_fast"] == row["ema_fast"] else None
+            ),
+            "ema_slow": (
+                float(row["ema_slow"])
+                if row["ema_slow"] == row["ema_slow"] else None
+            ),
         })
 
     return {
