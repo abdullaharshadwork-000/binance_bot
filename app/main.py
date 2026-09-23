@@ -118,6 +118,7 @@ async def _dashboard_payload() -> dict:
         "open_trade": open_trade,
         "open_trade_metrics": open_trade_metrics,
         "last_cycle": bot.last_cycle,
+        "last_execution": bot.last_execution,
         "learning": learning,
         "performance": performance,
         "trades": bot.db.list_trades(
@@ -131,7 +132,10 @@ async def _dashboard_payload() -> dict:
                 settings.mode == "live" and settings.allow_live_trading
             ),
             "symbol": settings.symbol,
+            "base_asset": settings.base_asset,
+            "quote_asset": settings.quote_asset,
             "interval": settings.interval,
+            "supported_intervals": sorted(SUPPORTED_INTERVALS),
             "cycle_seconds": settings.cycle_seconds,
             "use_websocket_market_data": settings.use_websocket_market_data,
             "market_data_stale_seconds": settings.market_data_stale_seconds,
@@ -171,9 +175,18 @@ async def status():
         "market_monitor": data["market_monitor"],
         "open_trade": data["open_trade"],
         "last_cycle": data["last_cycle"],
+        "last_execution": data["last_execution"],
         "learning": data["learning"],
         "engine_error": data["engine_error"],
     }
+
+
+@app.post("/bot/analyze")
+async def analyze_market():
+    try:
+        return await bot.analyze_once()
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/bot/run-once")
@@ -221,6 +234,7 @@ async def market_candles(interval: str | None = None, limit: int = 120):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     frame = frame.copy()
+    now_ms = int(time.time() * 1000)
     frame["ema_fast"] = ema(frame["close"], 20)
     frame["ema_slow"] = ema(frame["close"], 50)
     frame = frame.tail(limit)
@@ -243,6 +257,7 @@ async def market_candles(interval: str | None = None, limit: int = 120):
                 float(row["ema_slow"])
                 if row["ema_slow"] == row["ema_slow"] else None
             ),
+            "is_closed": int(row["close_time"]) < now_ms,
         })
 
     return {
