@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from app.agents.orchestrator import TradingOrchestrator
 from app.config import SUPPORTED_INTERVALS, get_settings
+from app.strategy.indicators import ema
 from app.ui.dashboard import DASHBOARD_HTML
 
 settings = get_settings()
@@ -213,6 +214,10 @@ async def market_candles(interval: str | None = None, limit: int = 120):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    frame = frame.copy()
+    frame["ema_fast"] = ema(frame["close"], 20)
+    frame["ema_slow"] = ema(frame["close"], 50)
+
     candles = []
     for row in frame.to_dict(orient="records"):
         candles.append({
@@ -223,6 +228,14 @@ async def market_candles(interval: str | None = None, limit: int = 120):
             "low": float(row["low"]),
             "close": float(row["close"]),
             "volume": float(row["volume"]),
+            "ema_fast": (
+                float(row["ema_fast"])
+                if row["ema_fast"] == row["ema_fast"] else None
+            ),
+            "ema_slow": (
+                float(row["ema_slow"])
+                if row["ema_slow"] == row["ema_slow"] else None
+            ),
         })
 
     return {
