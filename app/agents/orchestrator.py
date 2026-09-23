@@ -79,12 +79,11 @@ class TradingOrchestrator:
     async def _ensure_exchange_config(self) -> None:
         if self._exchange_validated:
             return
-        if self.settings.mode in {"testnet", "live"}:
-            await self.exchange.validate_symbol_assets(
-                self.settings.symbol,
-                self.settings.base_asset,
-                self.settings.quote_asset,
-            )
+        await self.exchange.validate_symbol_assets(
+            self.settings.symbol,
+            self.settings.base_asset,
+            self.settings.quote_asset,
+        )
         self._exchange_validated = True
 
     async def _on_price_tick(self, price: float, event_time_ms: int) -> None:
