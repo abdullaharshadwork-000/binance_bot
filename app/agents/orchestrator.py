@@ -390,6 +390,14 @@ class TradingOrchestrator:
                     False,
                     "Account equity refresh is pending; entry remains blocked",
                 )
+            elif (
+                self.portfolio_guard is not None
+                and self.portfolio_guard.entry_capacity_reason() is not None
+            ):
+                risk_decision = RiskDecision(
+                    False,
+                    self.portfolio_guard.entry_capacity_reason(),
+                )
             else:
                 risk_decision = self.risk.evaluate_entry(
                     signal=candidate_signal,
