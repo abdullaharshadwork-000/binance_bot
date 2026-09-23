@@ -56,8 +56,8 @@ DASHBOARD_HTML = r'''<!doctype html>
 
   <div class="controls">
     <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/analyze','Running read-only market analysis…')">▶ Analyze Market</button>
-    <button id="startBtn" class="b-green action" onclick="act('/bot/start','Starting automated checks…')">● Start Bot</button>
-    <button id="stopBtn" class="b-red action" onclick="act('/bot/stop','Stopping bot…')">■ Stop Bot</button>
+    <button id="startBtn" class="b-green action" onclick="act('/bot/start','Starting all configured markets…')">● Start All Markets</button>
+    <button id="stopBtn" class="b-red action" onclick="act('/bot/stop','Stopping all configured markets…')">■ Stop All Markets</button>
     <button class="b-gray action" onclick="loadAll(true)">↻ Refresh</button>
   </div>
 
@@ -65,7 +65,7 @@ DASHBOARD_HTML = r'''<!doctype html>
     <div class="card"><div class="metric-label">Bot status</div><div class="metric-value" id="running">—</div><div class="metric-note" id="cycleNote">—</div></div>
     <div class="card"><div class="metric-label" id="priceLabel">Asset price</div><div class="metric-value" id="price">—</div><div class="metric-note" id="symbol">—</div></div>
     <div class="card"><div class="metric-label">Account equity</div><div class="metric-value" id="equity">—</div><div class="metric-note" id="equityNote">Estimated current value</div></div>
-    <div class="card"><div class="metric-label">Today's realized P/L</div><div class="metric-value" id="dailyPnl">—</div><div class="metric-note" id="dailyLimit">—</div></div>
+    <div class="card"><div class="metric-label">Portfolio daily realized P/L</div><div class="metric-value" id="dailyPnl">—</div><div class="metric-note" id="dailyLimit">—</div></div>
     <div class="card"><div class="metric-label">Win rate</div><div class="metric-value" id="winRate">—</div><div class="metric-note" id="tradeCount">No closed trades</div></div>
     <div class="card"><div class="metric-label">Total realized P/L</div><div class="metric-value" id="totalPnl">—</div><div class="metric-note" id="profitFactor">Profit factor —</div></div>
     <div class="card"><div class="metric-label">Market feed</div><div class="metric-value" id="feedStatus">—</div><div class="metric-note" id="feedAge">Waiting for price stream</div></div>
@@ -368,7 +368,7 @@ function drawChart(curve){
 
 function renderConfig(d){
   const c=d.config;window.cfg=c;
-  $('config').innerHTML=`${row('Mode',badge(c.mode.toUpperCase(),c.mode==='live'?'red':c.mode==='testnet'?'amber':'blue'))}${row('Pair / strategy candle',`${esc(c.symbol)} · ${esc(c.interval)}`)}${row('Market / risk monitor',`Every ${c.cycle_seconds}s`)}${row('Price stream',c.use_websocket_market_data?badge('WEBSOCKET','green'):badge('REST','amber'))}${row('Strategy timing',`New completed ${esc(c.interval)} candle`)}${row('Account refresh',`Every ${c.account_refresh_seconds}s in testnet/live`)}${row('Paper slippage model',`${num(c.paper_slippage_bps,1)} bps per fill`)}${row('Risk per trade',pct(c.risk_per_trade))}${row('Max position allocation',pct(c.max_position_fraction))}${row('Daily loss stop',pct(c.max_daily_loss_fraction))}${row('Stop loss',pct(c.stop_loss_pct))}${row('Take profit',pct(c.take_profit_pct))}${row('Base signal threshold',pct(c.min_signal_confidence))}${row('Adaptive learning',c.adaptive_learning?badge('ON','green'):badge('OFF','amber'))}${row('LLM advisor',c.llm_advisor?badge('ON','blue'):badge('OFF','amber'))}${row('Live orders',c.live_orders_allowed?badge('ENABLED','red'):badge('BLOCKED','green'))}`;
+  $('config').innerHTML=`${row('Mode',badge(c.mode.toUpperCase(),c.mode==='live'?'red':c.mode==='testnet'?'amber':'blue'))}${row('Configured markets',esc((c.symbols||[c.symbol]).join(', ')))}${row('Max concurrent positions',c.max_concurrent_positions??1)}${row('Pair / strategy candle',`${esc(c.symbol)} · ${esc(c.interval)}`)}${row('Market / risk monitor',`Every ${c.cycle_seconds}s`)}${row('Price stream',c.use_websocket_market_data?badge('WEBSOCKET','green'):badge('REST','amber'))}${row('Strategy timing',`New completed ${esc(c.interval)} candle`)}${row('Account refresh',`Every ${c.account_refresh_seconds}s in testnet/live`)}${row('Paper slippage model',`${num(c.paper_slippage_bps,1)} bps per fill`)}${row('Risk per trade',pct(c.risk_per_trade))}${row('Max position allocation',pct(c.max_position_fraction))}${row('Daily loss stop',pct(c.max_daily_loss_fraction))}${row('Stop loss',pct(c.stop_loss_pct))}${row('Take profit',pct(c.take_profit_pct))}${row('Base signal threshold',pct(c.min_signal_confidence))}${row('Adaptive learning',c.adaptive_learning?badge('ON','green'):badge('OFF','amber'))}${row('LLM advisor',c.llm_advisor?badge('ON','blue'):badge('OFF','amber'))}${row('Live orders',c.live_orders_allowed?badge('ENABLED','red'):badge('BLOCKED','green'))}`;
 }
 
 async function loadAll(showLoading=false,force=false){
