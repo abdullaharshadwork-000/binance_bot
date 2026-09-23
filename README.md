@@ -15,6 +15,8 @@ A conservative Binance Spot trading bot with a simple dashboard, paper/testnet/l
 - Persistent HTTP client reduces repeated connection setup overhead.
 - Live/testnet account balance refresh is throttled separately from price monitoring.
 - Dashboard refreshes every second and shows market-feed freshness/source.
+- Optional multi-symbol Testnet engine can run BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT (or another shared-quote list) in parallel.
+- Portfolio entry coordination limits simultaneous positions and applies the daily realized-loss check across configured symbols.
 
 ## Why the strategy does not recalculate every second
 
@@ -30,6 +32,13 @@ ALLOW_LIVE_TRADING=false
 SYMBOL=BTCUSDT
 BASE_ASSET=BTC
 QUOTE_ASSET=USDT
+
+# Leave blank for single-symbol mode.
+# For multi-symbol Testnet testing:
+SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT
+MAX_CONCURRENT_POSITIONS=2
+ALLOW_MULTI_SYMBOL_LIVE=false
+
 INTERVAL=15m
 CYCLE_SECONDS=1
 USE_WEBSOCKET_MARKET_DATA=true
@@ -77,6 +86,12 @@ The learning component uses fixed rules over recent closed trades to adjust the 
 - `live`: real Binance Spot orders. Real orders remain blocked unless `ALLOW_LIVE_TRADING=true`.
 
 Never give the API key withdrawal permission. Keep `.env` private.
+
+## Multi-symbol mode
+
+Set `SYMBOLS` to a comma-separated list of Spot symbols that share `QUOTE_ASSET`. Each symbol gets its own strategy state, WebSocket price monitor, open-position record, order reconciliation, and learning profile. The manager runs them concurrently, while `MAX_CONCURRENT_POSITIONS` prevents every qualifying signal from opening at once.
+
+Multi-symbol live trading has a separate `ALLOW_MULTI_SYMBOL_LIVE` safety gate and should remain disabled until the Testnet behavior has been reviewed over a meaningful sample of trades. More markets increase the number of opportunities and the number of ways to lose; they do not guarantee higher profit.
 
 ## Important
 
