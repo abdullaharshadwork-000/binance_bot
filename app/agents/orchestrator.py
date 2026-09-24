@@ -40,7 +40,10 @@ class TradingOrchestrator:
         self.db = TradingDB(settings.database_path)
         self.db.init()
         self.exchange = BinanceClient(settings)
-        self.strategy = EnsembleStrategy()
+        self.strategy = EnsembleStrategy(
+            min_volume_ratio=settings.strategy_min_volume_ratio,
+            max_extension_atr=settings.strategy_max_extension_atr,
+        )
         self.risk = RiskManager(settings)
         self.learning = LearningAgent(settings)
         self.llm = LLMAdvisor(settings)
@@ -494,6 +497,7 @@ class TradingOrchestrator:
                         )
                 elif not execution.success:
                     downstream_ok = False
+                    risk_decision = RiskDecision(False, execution.message)
 
         if candidate is not None and downstream_ok:
             self._commit_strategy(candidate)

@@ -38,8 +38,8 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     out["ema_slow"] = ema(out["close"], 50)
     out["rsi"] = rsi(out["close"], 14)
     out["atr"] = atr(out, 14)
-    out["momentum_5"] = out["close"].pct_change(5)
+    out["momentum_5"] = out["close"].pct_change(5, fill_method=None)
     out["volume_mean_20"] = out["volume"].rolling(20).mean()
     out["volume_ratio"] = out["volume"] / out["volume_mean_20"].replace(0, np.nan)
     out["atr_pct"] = out["atr"] / out["close"]
-    return out.dropna().reset_index(drop=True)
+    return out.reset_index(drop=True)

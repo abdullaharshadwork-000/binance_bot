@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     trailing_stop_activation_pct: float = Field(default=0.01, gt=0, le=0.20)
     trailing_stop_distance_pct: float = Field(default=0.008, gt=0, le=0.10)
     breakeven_activation_pct: float = Field(default=0.006, gt=0, le=0.20)
+    strategy_min_volume_ratio: float = Field(default=0.75, ge=0, le=5)
+    strategy_max_extension_atr: float = Field(default=2.0, gt=0, le=10)
     min_signal_confidence: float = Field(default=0.70, ge=0.50, le=0.95)
     trading_fee_bps: float = Field(default=10.0, ge=0, le=100)
     paper_slippage_bps: float = Field(default=2.0, ge=0, le=100)

@@ -70,3 +70,54 @@ def test_trailing_distance_must_fit_inside_profit_target():
             take_profit_pct=0.01,
             trailing_stop_distance_pct=0.01,
         )
+
+
+def quality_candles():
+    x = np.arange(150)
+    close = 100 + x * .03 + np.sin(x * .5 + 1) * .4
+    return pd.DataFrame(dict(open=close, high=close + .3, low=close - .3,
+                             close=close, volume=np.full(150, 1000.0)))
+
+
+def test_entry_volume_filter_blocks_weak_participation():
+    candles = quality_candles()
+    assert EnsembleStrategy().evaluate(candles, False).side == SignalSide.BUY
+    candles.loc[149, "volume"] = 100
+    result = EnsembleStrategy().evaluate(candles, False)
+    assert result.side == SignalSide.HOLD
+    assert "volume" in result.reason
+    assert EnsembleStrategy(min_volume_ratio=0).evaluate(candles, False).side == SignalSide.BUY
+
+
+def test_extension_filter_is_configurable():
+    candles = quality_candles()
+    result = EnsembleStrategy(max_extension_atr=.1).evaluate(candles, False)
+    assert result.side == SignalSide.HOLD
+    assert "extended" in result.reason
+
+
+@pytest.mark.parametrize("column,value", [("close", np.nan), ("close", np.inf),
+    ("volume", -1), ("low", 10000), ("close", 0)])
+def test_invalid_latest_candle_never_falls_back_to_older_signal(column, value):
+    candles = quality_candles()
+    candles.loc[149, column] = value
+    result = EnsembleStrategy().evaluate(candles, False)
+    assert result.side == SignalSide.HOLD
+    assert result.confidence == 0
+    assert "Invalid" in result.reason
+
+
+def test_unavailable_latest_volume_indicator_does_not_use_old_candle():
+    candles = quality_candles()
+    candles.loc[130:, "volume"] = 0
+    result = EnsembleStrategy().evaluate(candles, False)
+    assert result.side == SignalSide.HOLD
+    assert "Indicators unavailable" in result.reason
+
+
+def test_entry_filters_do_not_suppress_bearish_exit():
+    candles = make_candles()
+    for column in ["open", "high", "low", "close"]:
+        candles[column] = candles[column].iloc[::-1].to_numpy()
+    candles.loc[149, "volume"] = 1
+    assert EnsembleStrategy().evaluate(candles, True).side == SignalSide.SELL

@@ -205,6 +205,8 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
             "trailing_stop_activation_pct": selected_settings.trailing_stop_activation_pct,
             "trailing_stop_distance_pct": selected_settings.trailing_stop_distance_pct,
             "min_signal_confidence": selected_settings.min_signal_confidence,
+            "strategy_min_volume_ratio": selected_settings.strategy_min_volume_ratio,
+            "strategy_max_extension_atr": selected_settings.strategy_max_extension_atr,
             "trading_fee_bps": selected_settings.trading_fee_bps,
             "paper_slippage_bps": selected_settings.paper_slippage_bps,
             "adaptive_learning": selected_settings.enable_adaptive_learning,

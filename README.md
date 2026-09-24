@@ -145,3 +145,18 @@ Multi-symbol live trading has a separate `ALLOW_MULTI_SYMBOL_LIVE` safety gate a
 Fast monitoring reduces avoidable software delay, but it does not guarantee a profitable fill or eliminate network latency, exchange latency, slippage, gaps, or losses. Paper results can differ from live results.
 
 Trailing protection is evaluated by the running bot and is not an exchange-resident stop order. After the configured activation gain, the persisted stop follows the highest observed price at the configured distance; after the earlier breakeven activation it cannot fall below entry. Keep the process running and validate all parameters in paper and Testnet modes before considering live use.
+
+
+### Entry quality and decision reporting
+
+Entries require relative volume of at least `STRATEGY_MIN_VOLUME_RATIO` (default
+0.75) and a close no more than `STRATEGY_MAX_EXTENSION_ATR` (default 2.0) ATR
+above the fast EMA. These filters apply to entries, while bearish strategy exits
+and protective stops remain active. Invalid OHLCV or unavailable latest indicators
+produce HOLD rather than silently evaluating an older candle. The risk status
+reports the final rejection if the portfolio guard or broker blocks an entry.
+
+These are conservative heuristics, not a validated profitability improvement.
+Evaluate them with fees and slippage in paper/Testnet before live use. Restart
+the application to load code/configuration changes; an existing process retains
+its loaded strategy. No risk limits or account balances need to be reset.

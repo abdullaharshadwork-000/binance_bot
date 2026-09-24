@@ -257,3 +257,24 @@ def test_profitable_position_ratchets_stop_and_persists_high_water_mark(tmp_path
         await bot.exchange.close()
 
     asyncio.run(scenario())
+
+
+def test_failed_entry_reports_final_rejection_in_risk_status(tmp_path):
+    async def scenario():
+        bot = make_bot(tmp_path)
+        bot._compute_strategy = AsyncMock(return_value={
+            "signal": StrategySignal(SignalSide.BUY, .95, "test"),
+            "candle_close_time": int(time.time() * 1000) - 1000,
+            "signal_price": 100.0, "llm_adjustment": 0.0, "llm_reason": "disabled"})
+        bot.broker.enter = AsyncMock(return_value=ExecutionResult(
+            "BUY", False, "Portfolio exposure limit reached"))
+        try:
+            result = await bot.run_once()
+            bot.broker.enter.assert_awaited_once()
+            assert result["risk"]["allowed"] is False
+            assert result["risk"]["reason"] == "Portfolio exposure limit reached"
+            assert result["risk"]["quantity"] == 0
+            assert bot.db.get_state(bot._entry_state_key) is None
+        finally:
+            await bot.exchange.close()
+    asyncio.run(scenario())
