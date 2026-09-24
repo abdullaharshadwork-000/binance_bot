@@ -17,6 +17,7 @@ A conservative Binance Spot trading bot with a simple dashboard, paper/testnet/l
 - Dashboard refreshes every second and shows market-feed freshness/source.
 - Optional multi-symbol Testnet engine can run BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT (or another shared-quote list) in parallel.
 - Portfolio entry coordination limits simultaneous positions and applies the daily realized-loss check across configured symbols.
+- Restart-safe high-water marks, breakeven protection, and ratcheting trailing stops lock in gains without ever loosening the original stop.
 
 ## Why the strategy does not recalculate every second
 
@@ -51,6 +52,10 @@ MAX_POSITION_FRACTION=0.05
 MAX_DAILY_LOSS_FRACTION=0.01
 STOP_LOSS_PCT=0.012
 TAKE_PROFIT_PCT=0.024
+ENABLE_TRAILING_STOP=true
+BREAKEVEN_ACTIVATION_PCT=0.006
+TRAILING_STOP_ACTIVATION_PCT=0.01
+TRAILING_STOP_DISTANCE_PCT=0.008
 MIN_SIGNAL_CONFIDENCE=0.70
 TRADING_FEE_BPS=10
 PAPER_SLIPPAGE_BPS=2
@@ -96,3 +101,5 @@ Multi-symbol live trading has a separate `ALLOW_MULTI_SYMBOL_LIVE` safety gate a
 ## Important
 
 Fast monitoring reduces avoidable software delay, but it does not guarantee a profitable fill or eliminate network latency, exchange latency, slippage, gaps, or losses. Paper results can differ from live results.
+
+Trailing protection is evaluated by the running bot and is not an exchange-resident stop order. After the configured activation gain, the persisted stop follows the highest observed price at the configured distance; after the earlier breakeven activation it cannot fall below entry. Keep the process running and validate all parameters in paper and Testnet modes before considering live use.

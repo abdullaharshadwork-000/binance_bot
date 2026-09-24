@@ -46,6 +46,7 @@ class TradingDB:
                     exit_reason TEXT,
                     stop_price REAL,
                     take_profit_price REAL,
+                    highest_price REAL,
                     opened_at TEXT NOT NULL,
                     closed_at TEXT
                 );
@@ -79,6 +80,13 @@ class TradingDB:
                 );
                 """
             )
+            # Forward-compatible migration for databases created before trailing
+            # protection was introduced.
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(trades)")
+            }
+            if "highest_price" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN highest_price REAL")
 
     @staticmethod
     def _set_state_conn(conn: sqlite3.Connection, key: str, value: Any) -> None:
@@ -119,12 +127,37 @@ class TradingDB:
                 """
                 INSERT INTO trades(
                     mode, symbol, quantity, entry_price, entry_fee, status,
-                    entry_reason, stop_price, take_profit_price, opened_at
-                ) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+                    entry_reason, stop_price, take_profit_price, highest_price, opened_at
+                ) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
                 """,
-                (mode, symbol, quantity, entry_price, entry_fee, reason, stop_price, take_profit_price, now),
+                (mode, symbol, quantity, entry_price, entry_fee, reason, stop_price,
+                 take_profit_price, entry_price, now),
             )
             return int(cur.lastrowid)
+
+    def raise_position_stop(
+        self,
+        trade_id: int,
+        *,
+        observed_price: float,
+        stop_price: float,
+    ) -> dict:
+        """Atomically record a high-water mark and a stop that can only increase."""
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM trades WHERE id=? AND status='OPEN'", (trade_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("Open trade not found")
+            old_high = float(row["highest_price"] or row["entry_price"])
+            old_stop = float(row["stop_price"])
+            new_high = max(old_high, float(observed_price))
+            new_stop = max(old_stop, float(stop_price))
+            conn.execute(
+                "UPDATE trades SET highest_price=?, stop_price=? WHERE id=?",
+                (new_high, new_stop, trade_id),
+            )
+            return {"highest_price": new_high, "stop_price": new_stop}
 
     def close_trade(
         self,

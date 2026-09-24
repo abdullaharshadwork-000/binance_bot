@@ -302,12 +302,45 @@ class Broker:
             )
 
         reason = None
-        if price <= float(trade["stop_price"]):
+        original_stop = float(trade["stop_price"])
+        if price <= original_stop:
             reason = "Stop loss"
         elif price >= float(trade["take_profit_price"]):
             reason = "Take profit"
         elif signal.side == SignalSide.SELL:
             reason = signal.reason
+
+        # Ratchet protection only after checking the existing stop. This prevents
+        # a price gap from being mistaken for a new high and guarantees stops are
+        # never loosened, even across restarts.
+        if reason is None and self.settings.enable_trailing_stop:
+            entry = float(trade["entry_price"])
+            previous_high = float(trade.get("highest_price") or entry)
+            high_water = max(previous_high, price)
+            candidate_stop = original_stop
+            if high_water >= entry * (1 + self.settings.breakeven_activation_pct):
+                candidate_stop = max(candidate_stop, entry)
+            if high_water >= entry * (1 + self.settings.trailing_stop_activation_pct):
+                candidate_stop = max(
+                    candidate_stop,
+                    high_water * (1 - self.settings.trailing_stop_distance_pct),
+                )
+            if high_water > previous_high or candidate_stop > original_stop:
+                normalized_stop = await self.exchange.normalize_price(
+                    self.settings.symbol, candidate_stop
+                )
+                protection = self.db.raise_position_stop(
+                    int(trade["id"]),
+                    observed_price=high_water,
+                    stop_price=normalized_stop,
+                )
+                if protection["stop_price"] > original_stop:
+                    return ExecutionResult(
+                        "HOLD",
+                        True,
+                        "Position retained; protective stop raised",
+                        protection,
+                    )
 
         if not reason:
             return ExecutionResult("HOLD", True, "Open position retained")

@@ -61,3 +61,12 @@ def test_rsi_flat_series_is_neutral():
 def test_invalid_interval_is_rejected_at_configuration_time():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, interval="7m")
+
+
+def test_trailing_distance_must_fit_inside_profit_target():
+    with pytest.raises(ValidationError, match="TRAILING_STOP_DISTANCE_PCT"):
+        Settings(
+            _env_file=None,
+            take_profit_pct=0.01,
+            trailing_stop_distance_pct=0.01,
+        )
