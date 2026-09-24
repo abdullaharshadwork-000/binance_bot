@@ -14,17 +14,51 @@ class Broker:
         self.db = db
         self._init_paper_balances()
 
+    @property
+    def _paper_quote_key(self) -> str:
+        # Quote cash is shared by symbols that trade the same quote asset, but it
+        # must never leak between paper/testnet/live portfolios.
+        return f"paper_balance:{self.settings.mode}:quote:{self.settings.quote_asset}"
+
+    @property
+    def _paper_base_key(self) -> str:
+        # Base inventory is symbol-specific. A single global base balance made an
+        # ETH bot value and sell BTC inventory in multi-symbol paper mode.
+        return f"paper_balance:{self.settings.mode}:base:{self.settings.symbol}"
+
     def _init_paper_balances(self):
-        if self.db.get_state("paper_quote_balance") is None:
-            self.db.set_state("paper_quote_balance", self.settings.paper_starting_balance)
-        if self.db.get_state("paper_base_balance") is None:
-            self.db.set_state("paper_base_balance", 0.0)
+        if self.settings.mode != "paper":
+            return
+
+        # Preserve balances from the pre-namespacing schema once. The manager
+        # constructs the primary symbol first, so any legacy base inventory is
+        # assigned only to that symbol rather than copied into every market.
+        migration_key = "paper_balance:namespaced_migration_owner"
+        migration_owner = self.db.get_state(migration_key)
+        if migration_owner is None:
+            legacy_quote = self.db.get_state("paper_quote_balance")
+            legacy_base = self.db.get_state("paper_base_balance")
+            self.db.set_states({
+                migration_key: self.settings.symbol,
+                self._paper_quote_key: (
+                    legacy_quote
+                    if legacy_quote is not None
+                    else self.settings.paper_starting_balance
+                ),
+                self._paper_base_key: legacy_base if legacy_base is not None else 0.0,
+            })
+            return
+
+        if self.db.get_state(self._paper_quote_key) is None:
+            self.db.set_state(self._paper_quote_key, self.settings.paper_starting_balance)
+        if self.db.get_state(self._paper_base_key) is None:
+            self.db.set_state(self._paper_base_key, 0.0)
 
     def _paper_quote_dec(self) -> Decimal:
-        return Decimal(str(self.db.get_state("paper_quote_balance", "0") or "0"))
+        return Decimal(str(self.db.get_state(self._paper_quote_key, "0") or "0"))
 
     def _paper_base_dec(self) -> Decimal:
-        return Decimal(str(self.db.get_state("paper_base_balance", "0") or "0"))
+        return Decimal(str(self.db.get_state(self._paper_base_key, "0") or "0"))
 
     async def equity(self, price: float) -> float:
         price_d = Decimal(str(price))
@@ -224,8 +258,8 @@ class Broker:
                 stop_price=stop_price,
                 take_profit_price=take_profit_price,
                 state_updates={
-                    "paper_quote_balance": quote - cost,
-                    "paper_base_balance": base + qty_d,
+                    self._paper_quote_key: quote - cost,
+                    self._paper_base_key: base + qty_d,
                 },
             )
             return ExecutionResult(
@@ -361,8 +395,8 @@ class Broker:
                 reason,
                 executed_quantity=float(qty_d),
                 state_updates={
-                    "paper_quote_balance": quote + (price_d * qty_d - fee),
-                    "paper_base_balance": max(Decimal("0"), base - qty_d),
+                    self._paper_quote_key: quote + (price_d * qty_d - fee),
+                    self._paper_base_key: max(Decimal("0"), base - qty_d),
                 },
             )
             return ExecutionResult(

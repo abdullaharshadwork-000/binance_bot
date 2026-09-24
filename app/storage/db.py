@@ -105,6 +105,12 @@ class TradingDB:
         with self.connection() as conn:
             self._set_state_conn(conn, key, value)
 
+    def set_states(self, updates: dict[str, Any]) -> None:
+        """Persist related state values in one transaction."""
+        with self.connection() as conn:
+            for key, value in updates.items():
+                self._set_state_conn(conn, key, value)
+
     def open_trade(
         self,
         *,
