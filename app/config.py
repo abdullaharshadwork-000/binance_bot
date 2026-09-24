@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     max_daily_loss_fraction: float = Field(default=0.01, gt=0, le=0.10)
     stop_loss_pct: float = Field(default=0.012, gt=0, le=0.10)
     take_profit_pct: float = Field(default=0.024, gt=0, le=0.30)
+    enable_trailing_stop: bool = True
+    trailing_stop_activation_pct: float = Field(default=0.01, gt=0, le=0.20)
+    trailing_stop_distance_pct: float = Field(default=0.008, gt=0, le=0.10)
+    breakeven_activation_pct: float = Field(default=0.006, gt=0, le=0.20)
     min_signal_confidence: float = Field(default=0.70, ge=0.50, le=0.95)
     trading_fee_bps: float = Field(default=10.0, ge=0, le=100)
     paper_slippage_bps: float = Field(default=2.0, ge=0, le=100)
@@ -85,6 +89,10 @@ class Settings(BaseSettings):
             )
         if self.base_asset == self.quote_asset:
             raise ValueError("BASE_ASSET and QUOTE_ASSET must be different")
+        if self.trailing_stop_distance_pct >= self.take_profit_pct:
+            raise ValueError(
+                "TRAILING_STOP_DISTANCE_PCT must be smaller than TAKE_PROFIT_PCT"
+            )
 
         for symbol in parsed_symbols:
             if self.base_for_symbol(symbol) is None:

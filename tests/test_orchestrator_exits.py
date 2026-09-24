@@ -211,3 +211,34 @@ def test_read_only_analysis_never_submits_or_closes_orders(tmp_path):
             await bot.exchange.close()
 
     asyncio.run(scenario())
+
+
+def test_profitable_position_ratchets_stop_and_persists_high_water_mark(tmp_path):
+    async def scenario():
+        bot = make_bot(tmp_path)
+        open_position(bot)
+        bot.exchange.normalize_price = AsyncMock(side_effect=lambda symbol, value: value)
+
+        result = await bot.broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.5, "hold"),
+            106.0,
+        )
+
+        trade = bot.db.get_open_trade("BTCUSDT", "paper")
+        assert result.action == "HOLD"
+        assert "stop raised" in result.message.lower()
+        assert trade["highest_price"] == pytest.approx(106.0)
+        assert trade["stop_price"] == pytest.approx(106 * (1 - 0.008))
+
+        # A pullback cannot loosen the persisted stop.
+        second = await bot.broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.5, "hold"),
+            105.5,
+        )
+        trade = bot.db.get_open_trade("BTCUSDT", "paper")
+        assert second.action == "HOLD"
+        assert trade["highest_price"] == pytest.approx(106.0)
+        assert trade["stop_price"] == pytest.approx(106 * (1 - 0.008))
+        await bot.exchange.close()
+
+    asyncio.run(scenario())
