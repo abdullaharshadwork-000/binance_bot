@@ -105,6 +105,14 @@ class TradingOrchestrator:
         self._exchange_validated = True
 
     async def _on_price_tick(self, price: float, event_time_ms: int) -> None:
+        # Reconnects and network buffering can deliver an older aggregate trade
+        # after a newer one. Never let it move the monitored price backwards in
+        # event time or make delayed data look current.
+        if (
+            self.latest_price_event_ms is not None
+            and event_time_ms < self.latest_price_event_ms
+        ):
+            return
         self.latest_price = price
         self.latest_price_event_ms = event_time_ms
         self.latest_price_received_monotonic = time.monotonic()

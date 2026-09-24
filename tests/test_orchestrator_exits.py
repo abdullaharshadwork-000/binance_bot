@@ -36,7 +36,22 @@ def open_position(bot):
         stop_price=95,
         take_profit_price=110,
     )
-    bot.db.set_state("paper_base_balance", 1)
+    bot.db.set_state(bot.broker._paper_base_key, 1)
+
+
+def test_out_of_order_websocket_tick_cannot_replace_newer_price(tmp_path):
+    async def scenario():
+        bot = make_bot(tmp_path)
+        try:
+            await bot._on_price_tick(101.0, 2_000)
+            await bot._on_price_tick(99.0, 1_000)
+
+            assert bot.latest_price == 101.0
+            assert bot.latest_price_event_ms == 2_000
+        finally:
+            await bot.exchange.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("exit_price", [94.0, 111.0])

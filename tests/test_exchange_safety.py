@@ -123,3 +123,47 @@ def test_third_asset_commission_is_converted_to_quote():
         await client.close()
 
     asyncio.run(scenario())
+
+
+def test_paper_base_balances_are_isolated_by_symbol(tmp_path):
+    db = TradingDB(str(tmp_path / "paper.db"))
+    db.init()
+    btc_settings = Settings(
+        _env_file=None,
+        mode="paper",
+        symbol="BTCUSDT",
+        quote_asset="USDT",
+        database_path=db.path,
+    )
+    eth_settings = Settings(
+        _env_file=None,
+        mode="paper",
+        symbol="ETHUSDT",
+        quote_asset="USDT",
+        database_path=db.path,
+    )
+    btc = Broker(btc_settings, BinanceClient(btc_settings), db)
+    eth = Broker(eth_settings, BinanceClient(eth_settings), db)
+
+    db.set_state(btc._paper_base_key, 1.25)
+
+    assert btc._paper_base_dec() == Decimal("1.25")
+    assert eth._paper_base_dec() == Decimal("0.0")
+    assert btc._paper_quote_key == eth._paper_quote_key
+
+
+def test_legacy_paper_balance_is_migrated_only_to_primary_symbol(tmp_path):
+    db = TradingDB(str(tmp_path / "legacy.db"))
+    db.init()
+    db.set_state("paper_quote_balance", "750.5")
+    db.set_state("paper_base_balance", "0.25")
+
+    btc_settings = Settings(_env_file=None, symbol="BTCUSDT", database_path=db.path)
+    eth_settings = Settings(_env_file=None, symbol="ETHUSDT", database_path=db.path)
+    btc = Broker(btc_settings, BinanceClient(btc_settings), db)
+    eth = Broker(eth_settings, BinanceClient(eth_settings), db)
+
+    assert btc._paper_quote_dec() == Decimal("750.5")
+    assert eth._paper_quote_dec() == Decimal("750.5")
+    assert btc._paper_base_dec() == Decimal("0.25")
+    assert eth._paper_base_dec() == Decimal("0.0")
