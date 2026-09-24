@@ -302,7 +302,7 @@ function renderSymbolOverview(items,portfolio){
     $('symbolOverview').innerHTML='<span class="muted">No configured markets.</span>';
     return;
   }
-  $('portfolioStatus').textContent=`Open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · daily P/L ${money(portfolio?.daily_realized_pnl)}`;
+  $('portfolioStatus').textContent=`Open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${num(portfolio?.available_quote,2)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
   const body=rows.map(item=>{
     const risk=item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
     const status=item.error?badge('ERROR','red'):item.running?badge('RUNNING','green'):badge('STOPPED','amber');

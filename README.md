@@ -94,6 +94,48 @@ Never give the API key withdrawal permission. Keep `.env` private.
 
 ## Multi-symbol mode
 
+The portfolio upgrade uses the configured `SYMBOLS` allowlist; the example is
+`BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT`. Start Bot monitors these markets concurrently
+and submits orders only when a completed-candle signal passes all entry checks.
+It does not force a trade on every coin. Existing mode and live-trading gates apply.
+
+All bots share one background account request and one portfolio valuation:
+quote cash is counted once, and configured coin holdings (including locked
+balances in Testnet/live) are valued using fresh prices. Coins outside the
+configured list are not included in this valuation. Existing holdings of the
+configured coins count toward exposure, including pre-funded Testnet balances.
+Paper holdings come from each coin's open-position ledger instead of the old
+shared base balance. Existing USDT paper cash is preserved; other quote assets
+use separate cash keys. Previously corrupted paper history is not repaired.
+
+Additional settings (defaults apply without changing an existing `.env`):
+
+| Setting | Default | Effect |
+|---|---|---|
+| `MAX_PORTFOLIO_EXPOSURE_FRACTION` | `0.15` | Blocks entries that would take combined configured-coin exposure above 15% of portfolio equity. |
+| `ACCOUNT_MAX_AGE_SECONDS` | `15` | Blocks entries when account valuation is too old; protective exits continue independently. Must be at least `ACCOUNT_REFRESH_SECONDS`. |
+| `MAX_ENTRY_DEVIATION_PCT` | `0.015` | Rejects entries when price has moved more than 1.5% from the signal candle close. |
+| `ENTRY_COOLDOWN_SECONDS` | `60` | Prevents immediate re-entry in a coin after its latest recorded exit. |
+
+Entry approval serializes cash, exposure, position-count, unresolved-order, and
+daily-loss checks across the portfolio. Non-paper order attempts invalidate the
+account snapshot before another allocation. Failed or stale account requests
+block entries, and missing prices for held coins block portfolio valuation.
+Signals expire after the next strategy interval plus refresh grace; rejected
+order attempts cannot retry an old candle indefinitely. Entry requests queued
+behind another coin are rejected for resizing if the latest price moved by more
+than 0.1% while waiting.
+
+Risk sizing includes estimated round-trip fees/slippage. The learning risk
+multiplier also reduces exposure-capped position sizes. Breakeven protection
+includes recorded entry fees and estimated exit costs; actual fills can still
+lose money through gaps, slippage, or estimation errors. Portfolio equity,
+available cash, exposure, and valuation errors appear in the dashboard.
+
+Run offline regression checks with `python -m pytest`. These verify execution
+and accounting behavior, not strategy profitability. Backtesting and sustained
+Testnet validation remain necessary before enabling live trading.
+
 Set `SYMBOLS` to a comma-separated list of Spot symbols that share `QUOTE_ASSET`. Each symbol gets its own strategy state, WebSocket price monitor, open-position record, order reconciliation, and learning profile. The manager runs them concurrently, while `MAX_CONCURRENT_POSITIONS` prevents every qualifying signal from opening at once.
 
 Multi-symbol live trading has a separate `ALLOW_MULTI_SYMBOL_LIVE` safety gate and should remain disabled until the Testnet behavior has been reviewed over a meaningful sample of trades. More markets increase the number of opportunities and the number of ways to lose; they do not guarantee higher profit.

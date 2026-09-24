@@ -1,4 +1,5 @@
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -14,7 +15,17 @@ manager = MultiSymbolTradingManager(settings)
 # Backwards-compatible alias for code/tests that still import app.main.bot.
 bot = manager.primary_bot
 
-app = FastAPI(title="Agentic Binance Bot", version="0.6.0")
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        yield
+    finally:
+        await manager.stop()
+        for item in manager.bots.values():
+            await item.exchange.close()
+
+
+app = FastAPI(title="Agentic Binance Bot", version="0.7.0", lifespan=lifespan)
 
 
 def _selected_bot(symbol: str | None = None):
@@ -125,7 +136,7 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
         equity * selected_settings.max_daily_loss_fraction
         if equity is not None else None
     )
-    engine_error = selected_bot.reconciliation_warning
+    engine_error = selected_bot.reconciliation_warning or manager.portfolio.snapshot()["error"]
     if isinstance(selected_bot.last_cycle, dict):
         engine_error = (
             engine_error
@@ -157,6 +168,7 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
         ),
         "symbol_overview": manager.overview(),
         "portfolio": {
+            **manager.portfolio.snapshot(),
             "open_positions": manager.portfolio.db.count_open_trades(
                 mode=settings.mode,
                 symbols=manager.symbols,

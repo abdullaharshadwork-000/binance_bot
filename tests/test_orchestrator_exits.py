@@ -110,7 +110,7 @@ def test_background_strategy_candidate_is_not_consumed_until_downstream_ready(tm
 
         candidate = {
             "signal": StrategySignal(SignalSide.BUY, 0.95, "New signal"),
-            "candle_close_time": 123,
+            "candle_close_time": int(time.time() * 1000) - 1000,
             "signal_price": 101.0,
             "llm_adjustment": 0.0,
             "llm_reason": "Not requested",
@@ -136,7 +136,7 @@ def test_background_strategy_candidate_is_not_consumed_until_downstream_ready(tm
 
             assert second["risk"]["allowed"] is True
             assert bot.broker.enter.await_args.args[2] == 102.0
-            assert bot.db.get_state(bot._entry_state_key) == "123"
+            assert bot.db.get_state(bot._entry_state_key) == str(candidate["candle_close_time"])
         finally:
             await bot.exchange.close()
 

@@ -242,12 +242,13 @@ class Broker:
             fee_rate = Decimal(str(self.settings.trading_fee_bps)) / Decimal("10000")
             fee = price_d * qty_d * fee_rate
             cost = price_d * qty_d + fee
+            stop_price, take_profit_price = await self._risk_prices_from_fill(fill_price)
+            # Read shared cash after the final await, immediately before committing.
             quote = self._paper_quote_dec()
             base = self._paper_base_dec()
             if cost > quote:
                 return ExecutionResult("BUY", False, "Insufficient paper quote balance")
 
-            stop_price, take_profit_price = await self._risk_prices_from_fill(fill_price)
             trade_id = self.db.open_trade(
                 mode=self.settings.mode,
                 symbol=self.settings.symbol,
@@ -353,7 +354,12 @@ class Broker:
             high_water = max(previous_high, price)
             candidate_stop = original_stop
             if high_water >= entry * (1 + self.settings.breakeven_activation_pct):
-                candidate_stop = max(candidate_stop, entry)
+                fee_rate = self.settings.trading_fee_bps / 10000
+                slip = self.settings.paper_slippage_bps / 10000
+                unit_cost = entry + float(trade.get("entry_fee") or 0) / float(trade["quantity"])
+                breakeven = unit_cost / ((1 - fee_rate) * (1 - slip))
+                if breakeven < price:
+                    candidate_stop = max(candidate_stop, breakeven)
             if high_water >= entry * (1 + self.settings.trailing_stop_activation_pct):
                 candidate_stop = max(
                     candidate_stop,

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     market_data_stale_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     strategy_refresh_grace_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
     account_refresh_seconds: float = Field(default=5.0, ge=1.0, le=60.0)
+    account_max_age_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+    max_entry_deviation_pct: float = Field(default=0.015, gt=0, le=0.10)
+    max_portfolio_exposure_fraction: float = Field(default=0.15, gt=0, le=1.0)
+    entry_cooldown_seconds: float = Field(default=60.0, ge=0, le=86400)
 
     binance_api_key: str = ""
     binance_api_secret: str = ""
@@ -72,6 +76,10 @@ class Settings(BaseSettings):
         self.quote_asset = self.quote_asset.strip().upper()
         self.interval = self.interval.strip()
         parsed_symbols = self.trading_symbols
+        if not parsed_symbols:
+            raise ValueError("At least one trading symbol is required")
+        if self.account_max_age_seconds < self.account_refresh_seconds:
+            raise ValueError("ACCOUNT_MAX_AGE_SECONDS must cover ACCOUNT_REFRESH_SECONDS")
 
         if parsed_symbols:
             self.symbol = parsed_symbols[0]

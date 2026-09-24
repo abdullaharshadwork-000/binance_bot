@@ -18,3 +18,5 @@ __pycache__/
 # Local data / databases
 data/
 *.db
+.pytest_full_audit_*/
+.pytest_push_check*/

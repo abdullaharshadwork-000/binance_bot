@@ -1,4 +1,5 @@
 from decimal import Decimal
+import math
 
 from app.config import Settings
 from app.models import RiskDecision, SignalSide, StrategySignal
@@ -18,6 +19,10 @@ class RiskManager:
         threshold: float,
         risk_multiplier: float,
     ) -> RiskDecision:
+        if not all(math.isfinite(value) for value in (
+            price, equity, daily_realized_pnl, threshold, risk_multiplier, signal.confidence
+        )):
+            return RiskDecision(False, "Non-finite market or risk input")
         if signal.side != SignalSide.BUY:
             return RiskDecision(False, "No buy signal")
         if signal.confidence < threshold:
@@ -40,10 +45,13 @@ class RiskManager:
         exposure_pct = Decimal(str(self.settings.max_position_fraction))
         multiplier = Decimal(str(max(0.5, min(risk_multiplier, 1.0))))
 
-        stop_distance = price_d * stop_pct
+        # Budget for both commissions and adverse execution, not just the stop.
+        fee = Decimal(str(self.settings.trading_fee_bps)) / Decimal("10000")
+        slippage = Decimal(str(self.settings.paper_slippage_bps)) / Decimal("10000")
+        stop_distance = price_d * (stop_pct + 2 * fee + 2 * slippage)
         risk_budget = equity_d * risk_pct * multiplier
         qty_by_risk = risk_budget / stop_distance
-        qty_by_exposure = (equity_d * exposure_pct) / price_d
+        qty_by_exposure = (equity_d * exposure_pct * multiplier) / (price_d * (1 + fee + slippage))
         quantity = min(qty_by_risk, qty_by_exposure)
 
         return RiskDecision(

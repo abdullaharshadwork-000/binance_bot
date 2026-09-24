@@ -1,5 +1,6 @@
 import asyncio
 import time
+import math
 from datetime import datetime, timezone
 
 from app.agents.learning import LearningAgent
@@ -105,9 +106,11 @@ class TradingOrchestrator:
         self._exchange_validated = True
 
     async def _on_price_tick(self, price: float, event_time_ms: int) -> None:
-        # Reconnects and network buffering can deliver an older aggregate trade
-        # after a newer one. Never let it move the monitored price backwards in
-        # event time or make delayed data look current.
+        if not math.isfinite(price) or price <= 0:
+            return
+        if event_time_ms > int(time.time() * 1000) + 1000:
+            return
+        # Ignore buffered ticks older than the latest accepted exchange event.
         if (
             self.latest_price_event_ms is not None
             and event_time_ms < self.latest_price_event_ms
@@ -244,7 +247,10 @@ class TradingOrchestrator:
 
     async def _poll_strategy(self, force: bool = False) -> dict | None:
         if self.pending_strategy_result is not None:
-            return self.pending_strategy_result
+            if self._candidate_expired(self.pending_strategy_result):
+                self.pending_strategy_result = None
+            else:
+                return self.pending_strategy_result
 
         if self.strategy_task is None and (
             force or self._strategy_refresh_due()
@@ -286,6 +292,9 @@ class TradingOrchestrator:
             self.strategy_task = None
 
     async def _poll_equity(self, price: float) -> float | None:
+        if self.portfolio_guard is not None:
+            self.last_equity = await self.portfolio_guard.poll_equity()
+            return self.last_equity
         if self.settings.mode == "paper":
             self.last_equity = await self.broker.equity(price)
             self.last_equity_update_monotonic = time.monotonic()
@@ -311,7 +320,28 @@ class TradingOrchestrator:
         if due and self.equity_task is None:
             self.equity_task = asyncio.create_task(self.broker.equity(price))
 
+        if self.last_equity_update_monotonic is None or time.monotonic() - self.last_equity_update_monotonic > self.settings.account_max_age_seconds:
+            return None
         return self.last_equity
+
+    def _candidate_expired(self, candidate: dict) -> bool:
+        age = int(time.time() * 1000) - int(candidate["candle_close_time"])
+        return age > interval_to_ms(self.settings.interval) + int(self.settings.strategy_refresh_grace_seconds * 1000)
+
+    def _entry_quality_reason(self, candidate: dict, price: float) -> str | None:
+        if self._candidate_expired(candidate):
+            return "Strategy candle expired; waiting for fresh analysis"
+        reference = float(candidate["signal_price"])
+        if not math.isfinite(reference) or reference <= 0 or not math.isfinite(price) or price <= 0:
+            return "Invalid entry price"
+        if abs(price / reference - 1) > self.settings.max_entry_deviation_pct:
+            return "Price moved too far from the strategy candle"
+        closed = self.db.closed_trades(limit=1, mode=self.settings.mode, symbol=self.settings.symbol)
+        if closed:
+            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(closed[0]["closed_at"])).total_seconds()
+            if elapsed < self.settings.entry_cooldown_seconds:
+                return "Post-exit cooldown is active"
+        return None
 
     async def _cycle_unlocked(self, force_strategy: bool = False) -> dict:
         await self._ensure_exchange_config()
@@ -331,12 +361,18 @@ class TradingOrchestrator:
         if open_trade:
             # Protective exits are always checked before slower strategy/account work.
             execution = await self.broker.maybe_exit(signal, price)
+            if execution.action == "SELL" and self.portfolio_guard is not None:
+                self.portfolio_guard.invalidate_account()
             open_trade = self.db.get_open_trade(
                 self.settings.symbol,
                 self.settings.mode,
             )
 
         candidate = await self._poll_strategy(force=force_strategy)
+        if candidate is not None and self._candidate_expired(candidate):
+            self.pending_strategy_result = None
+            self.strategy_error = "Strategy result expired before it could be used"
+            candidate = None
         strategy_updated = candidate is not None
         candidate_signal = candidate["signal"] if candidate else signal
 
@@ -345,6 +381,8 @@ class TradingOrchestrator:
         ):
             price, price_source, price_age_ms = await self._market_price()
             execution = await self.broker.maybe_exit(candidate_signal, price)
+            if execution.action == "SELL" and self.portfolio_guard is not None:
+                self.portfolio_guard.invalidate_account()
             open_trade = self.db.get_open_trade(
                 self.settings.symbol,
                 self.settings.mode,
@@ -370,6 +408,10 @@ class TradingOrchestrator:
         downstream_ok = True
 
         if not open_trade:
+            # A manual refresh/advisor can take time. Reprice before sizing.
+            if candidate is not None:
+                price, price_source, price_age_ms = await self._market_price()
+            quality_reason = self._entry_quality_reason(candidate, price) if candidate is not None else None
             candle_close_time = (
                 int(candidate["candle_close_time"])
                 if candidate is not None
@@ -392,6 +434,8 @@ class TradingOrchestrator:
                     False,
                     "Waiting for the next completed candle before a new entry",
                 )
+            elif quality_reason is not None:
+                risk_decision = RiskDecision(False, quality_reason)
             elif equity is None:
                 downstream_ok = False
                 risk_decision = RiskDecision(
@@ -429,6 +473,8 @@ class TradingOrchestrator:
                                 risk_decision,
                                 price,
                             ),
+                            notional=risk_decision.quantity * price,
+                            expected_price=price,
                         )
                     else:
                         execution = await self.broker.enter(
