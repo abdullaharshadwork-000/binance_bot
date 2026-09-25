@@ -153,7 +153,7 @@ DASHBOARD_HTML = r'''<!doctype html>
       <h2>What the Dashboard Means</h2>
       <div class="help-grid">
         <div class="help"><b>BUY / HOLD / SELL</b><span>The strategy's current market opinion. A BUY still must pass the risk engine before any order is allowed.</span></div>
-        <div class="help"><b>Confidence</b><span>How strongly the strategy supports its signal. It must reach the current threshold before an entry can be considered.</span></div>
+        <div class="help"><b>Strategy score</b><span>A rule-based score out of 100, not a win probability or a score shared with other apps. HOLD has no actionable score. BUY must meet the entry threshold and all risk checks.</span></div>
         <div class="help"><b>Risk engine</b><span>The final deterministic safety gate. It controls position size, stop loss, exposure and the daily loss limit.</span></div>
         <div class="help"><b>Equity</b><span>Your estimated account value in the configured quote asset. In paper mode it combines simulated quote balance with the current value of the configured base-asset position.</span></div>
         <div class="help"><b>Win rate</b><span>Percentage of closed trades that made money. It should never be judged without average win/loss and total P/L.</span></div>
@@ -312,20 +312,23 @@ function renderSymbolOverview(items,portfolio){
   const body=rows.map(item=>{
     const risk=item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
     const status=item.error?badge('ERROR','red'):item.running?badge('RUNNING','green'):badge('STOPPED','amber');
-    return `<tr><td><b>${esc(item.symbol)}</b></td><td>${sideBadge(item.signal)}</td><td>${pct(item.confidence)}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price===null||item.price===undefined?'—':num(item.price,4)}</td><td>${status}</td></tr>`;
+    return `<tr><td><b>${esc(item.symbol)}</b></td><td>${sideBadge(item.signal)}</td><td>${item.signal==='BUY'||item.signal==='SELL'?num(Number(item.confidence)*100,1)+'/100':'?'}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price===null||item.price===undefined?'—':num(item.price,4)}</td><td>${status}</td></tr>`;
   }).join('');
-  $('symbolOverview').innerHTML=`<table><thead><tr><th>Market</th><th>Signal</th><th>Confidence</th><th>Entry Gate</th><th>Position</th><th>Price</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`;
+  $('symbolOverview').innerHTML=`<table><thead><tr><th>Market</th><th>Signal</th><th>Strategy score</th><th>Entry Gate</th><th>Position</th><th>Price</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function renderDecision(cycle){
   if(!cycle?.signal){$('decision').innerHTML='<span class="muted">No market decision yet.</span>';return}
   const s=cycle.signal, f=s.features||{}, threshold=cycle.learning?.confidence_threshold;
   const c=Math.max(0,Math.min(1,Number(s.confidence||0)));
+  const actionable=s.side==='BUY'||s.side==='SELL';
+  const scoreLabel=s.side==='SELL'?'Exit strategy score':'Entry strategy score';
   $('decision').innerHTML=`
     <div style="display:flex;justify-content:space-between;gap:15px;align-items:center;flex-wrap:wrap">
       <div><div class="metric-label">Signal</div><div class="signal">${sideBadge(s.side)}</div></div>
-      <div style="min-width:230px"><div class="row"><span class="key">Confidence</span><span class="val">${pct(c)}</span></div><div class="progress"><div style="width:${c*100}%"></div></div><div class="metric-note">Required threshold: ${pct(threshold)}</div></div>
+      <div style="min-width:230px"><div class="row"><span class="key">${scoreLabel}</span><span class="val">${actionable?num(c*100,1)+'/100':'No actionable signal'}</span></div>${actionable?`<div class="progress"><div style="width:${c*100}%"></div></div>`:''}<div class="metric-note">BUY entry threshold: ${threshold==null?'?':num(threshold*100,1)+'/100'}</div></div>
     </div>
+    <div class="metric-note">Local strategy score from completed candles; not a win probability. Futures liquidity scores from other apps use different inputs and may not be comparable.</div>
     <div class="explain"><b>Why:</b> ${esc(s.reason)}</div>
     <div style="margin-top:10px">${row('RSI',num(f.rsi,2))}${row('Fast EMA',num(f.ema_fast,2))}${row('Slow EMA',num(f.ema_slow,2))}${row('5-candle momentum',pct(f.momentum_5))}${row('Volume ratio',num(f.volume_ratio,2)+'×')}${row('ATR / volatility',pct(f.atr_pct))}</div>`;
 }
