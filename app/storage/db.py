@@ -311,6 +311,19 @@ class TradingDB:
             rows = conn.execute(sql, tuple(params)).fetchall()
             return [dict(row) for row in rows]
 
+    def recent_portfolio_closes(self, *, mode: str, symbols: list[str], limit: int) -> list[dict]:
+        """Order by exit time: simultaneous positions can close out of entry order."""
+        if not symbols:
+            return []
+        placeholders = ",".join("?" for _ in symbols)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM trades WHERE status='CLOSED' AND mode=? "
+                f"AND symbol IN ({placeholders}) ORDER BY closed_at DESC, id DESC LIMIT ?",
+                (mode, *symbols, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def count_open_trades(
         self,
         *,

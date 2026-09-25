@@ -1,6 +1,7 @@
 import asyncio
 import time
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -79,6 +80,9 @@ class PortfolioCoordinator:
         error = self.account_error
         age = None if self._balance_time is None else time.monotonic() - self._balance_time
         holdings = {}
+        holding_details = []
+        managed_exposure = 0.0
+        unmanaged_exposure = 0.0
         if self.settings.mode == "paper":
             key = f"paper_balance:{self.settings.mode}:quote:{self.settings.quote_asset}"
             cash = float(self.db.get_state(key, str(self.settings.paper_starting_balance)))
@@ -108,13 +112,34 @@ class PortfolioCoordinator:
                     equity = None
                     error = f"Fresh valuation required for held asset {symbol}"
                     break
-                exposure += quantity * price
+                value = quantity * price
+                trade = self.db.get_open_trade(symbol, self.settings.mode)
+                managed_quantity = min(quantity, float(trade["quantity"])) if trade else 0.0
+                unmanaged_quantity = max(0.0, quantity - managed_quantity)
+                managed_value = managed_quantity * price
+                unmanaged_value = unmanaged_quantity * price
+                exposure += value
+                managed_exposure += managed_value
+                unmanaged_exposure += unmanaged_value
+                holding_details.append({
+                    "symbol": symbol, "quantity": quantity, "value": value,
+                    "managed_quantity": managed_quantity,
+                    "unmanaged_quantity": unmanaged_quantity,
+                    "managed_value": managed_value, "unmanaged_value": unmanaged_value,
+                })
             if equity is not None:
                 equity += exposure
                 if not math.isfinite(equity) or equity <= 0:
                     equity = None
                     error = "Portfolio equity is invalid"
-        return {"equity": equity, "available_quote": cash, "exposure": exposure,
+        # Partial valuations must not look like complete, current account totals.
+        valuation_valid = equity is not None
+        return {"equity": equity, "available_quote": cash,
+                "exposure": exposure if valuation_valid else None,
+                "managed_exposure": managed_exposure if valuation_valid else None,
+                "unmanaged_exposure": unmanaged_exposure if valuation_valid else None,
+                "holdings": holding_details if valuation_valid else [],
+                "exposure_scope": "Configured symbols, including holdings outside bot positions",
                 "exposure_fraction": exposure / equity if equity else None,
                 "max_exposure_fraction": self.settings.max_portfolio_exposure_fraction,
                 "account_age_seconds": age, "error": error}
@@ -124,6 +149,26 @@ class PortfolioCoordinator:
             mode=self.settings.mode,
             symbols=self.symbols,
         )
+
+    def loss_pause_reason(self) -> str | None:
+        if self.settings.loss_streak_pause_seconds == 0:
+            return None
+        recent = self.db.recent_portfolio_closes(
+            mode=self.settings.mode, symbols=self.symbols,
+            limit=self.settings.max_consecutive_losses,
+        )
+        if len(recent) < self.settings.max_consecutive_losses or any(
+            float(trade["pnl"] or 0) >= 0 for trade in recent
+        ):
+            return None
+        closed_at = datetime.fromisoformat(recent[0]["closed_at"])
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - closed_at).total_seconds()
+        remaining = self.settings.loss_streak_pause_seconds - elapsed
+        if remaining > 0:
+            return f"Loss-streak pause: {len(recent)} consecutive losses; retry in {math.ceil(remaining)}s"
+        return None
 
     def entry_capacity_reason(self) -> str | None:
         open_positions = self.db.count_open_trades(
@@ -150,6 +195,9 @@ class PortfolioCoordinator:
         async with self._entry_lock:
             if symbol not in self.symbols:
                 return ExecutionResult("BUY", False, "Symbol is outside the configured trading list")
+            pause_reason = self.loss_pause_reason()
+            if pause_reason is not None:
+                return ExecutionResult("BUY", False, pause_reason, {"order_submitted": False})
             capacity_reason = self.entry_capacity_reason()
             if capacity_reason is not None:
                 return ExecutionResult("BUY", False, capacity_reason)
@@ -175,7 +223,16 @@ class PortfolioCoordinator:
                 if notional * costs > snapshot["available_quote"]:
                     return ExecutionResult("BUY", False, "Insufficient shared quote balance including costs")
                 if snapshot["exposure"] + notional * costs > equity * self.settings.max_portfolio_exposure_fraction:
-                    return ExecutionResult("BUY", False, "Portfolio exposure limit reached")
+                    return ExecutionResult(
+                        "BUY", False,
+                        f"Portfolio exposure limit reached: account holdings {snapshot['exposure_fraction']:.1%}, "
+                        f"limit {self.settings.max_portfolio_exposure_fraction:.1%}; "
+                        f"holdings outside bot positions {snapshot['unmanaged_exposure']:.2f} {self.settings.quote_asset}",
+                        {"order_submitted": False, "exposure": snapshot["exposure"],
+                         "unmanaged_exposure": snapshot["unmanaged_exposure"],
+                         "max_exposure": equity * self.settings.max_portfolio_exposure_fraction,
+                         "requested_notional_with_costs": notional * costs},
+                    )
                 if self.realized_pnl_today() <= -equity * self.settings.max_daily_loss_fraction:
                     return ExecutionResult("BUY", False, "Portfolio daily loss limit reached")
             try:

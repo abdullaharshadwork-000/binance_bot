@@ -8,7 +8,8 @@ from app.strategy.indicators import enrich
 class EnsembleStrategy:
     """A transparent baseline ensemble: trend + momentum + RSI + volume/volatility context."""
 
-    def __init__(self, min_volume_ratio: float = 0.75, max_extension_atr: float = 2.0):
+    def __init__(self, min_volume_ratio: float = 0.75, max_extension_atr: float = 2.0, min_trend_atr: float = 0.25):
+        self.min_trend_atr = min_trend_atr
         self.min_volume_ratio = min_volume_ratio
         self.max_extension_atr = max_extension_atr
 
@@ -57,9 +58,12 @@ class EnsembleStrategy:
             "volume_ratio": volume_ratio,
             "atr_pct": atr_pct,
             "trend_strength": float(trend_strength),
+            "trend_separation_atr": float((x.ema_fast - x.ema_slow) / x.atr) if x.atr > 0 else 0.0,
         }
 
         if not has_position and bullish and 43 <= rsi <= 70:
+            if features["trend_separation_atr"] < self.min_trend_atr:
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak EMA trend separation", features)
             if volume_ratio < self.min_volume_ratio:
                 return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak relative volume", features)
             if x.atr <= 0 or (x.close - x.ema_fast) > self.max_extension_atr * x.atr:

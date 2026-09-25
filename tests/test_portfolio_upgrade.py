@@ -236,3 +236,85 @@ def test_failed_account_refresh_blocks_new_allocations(tmp_path):
         submit.assert_not_awaited()
         await m.portfolio.close()
     asyncio.run(scenario())
+
+
+def test_account_holdings_outside_bot_positions_still_count_toward_limit(tmp_path):
+    async def scenario():
+        m = manager(tmp_path, mode="testnet", binance_api_key="test", binance_api_secret="test")
+        await tick(m.primary_bot, 100)
+        m.portfolio._balances = {"balances": [
+            {"asset": "USDT", "free": "100", "locked": "0"},
+            {"asset": "BTC", "free": "9", "locked": "0"}]}
+        m.portfolio._balance_time = time.monotonic()
+        snapshot = m.portfolio.snapshot()
+        assert snapshot["equity"] == 1000
+        assert snapshot["managed_exposure"] == 0
+        assert snapshot["unmanaged_exposure"] == 900
+        assert snapshot["holdings"][0]["unmanaged_quantity"] == 9
+        submit = AsyncMock()
+        result = await m.portfolio.execute_entry("BTCUSDT", submit, notional=10)
+        assert not result.success
+        assert "90.0%" in result.message and "15.0%" in result.message
+        assert result.details["order_submitted"] is False
+        submit.assert_not_awaited()
+        m.primary_bot.latest_price_event_ms -= 60000
+        stale = m.portfolio.snapshot()
+        assert stale["equity"] is None
+        assert stale["exposure"] is None
+        assert stale["unmanaged_exposure"] is None
+        assert stale["holdings"] == []
+    asyncio.run(scenario())
+
+
+def record_close(m, symbol, exit_price):
+    bot = m.get_bot(symbol)
+    trade_id = position(bot)
+    bot.db.close_trade(trade_id, exit_price, 0, "test")
+    return trade_id
+
+
+def test_portfolio_loss_pause_blocks_entries_and_survives_restart(tmp_path):
+    async def scenario():
+        m = manager(tmp_path)
+        for symbol in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
+            record_close(m, symbol, 99)
+        assert "3 consecutive losses" in m.portfolio.loss_pause_reason()
+        restarted = manager(tmp_path)
+        submit = AsyncMock()
+        result = await restarted.portfolio.execute_entry("XRPUSDT", submit, notional=10)
+        assert not result.success and "Loss-streak pause" in result.message
+        submit.assert_not_awaited()
+        # Existing positions can still exit during the entry pause.
+        xrp = m.get_bot("XRPUSDT")
+        position(xrp)
+        result = await xrp.broker.maybe_exit(StrategySignal(SignalSide.HOLD, .5, "test"), 94)
+        assert result.success and result.action == "SELL"
+    asyncio.run(scenario())
+
+
+def test_loss_pause_expires_and_a_nonlosing_close_breaks_streak(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    m = manager(tmp_path)
+    for symbol in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
+        record_close(m, symbol, 99)
+    with m.portfolio.db.connection() as conn:
+        conn.execute("UPDATE trades SET closed_at=?", (
+            (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),))
+    assert m.portfolio.loss_pause_reason() is None
+    record_close(m, "XRPUSDT", 99)
+    assert m.portfolio.loss_pause_reason() is not None
+    record_close(m, "BTCUSDT", 101)
+    assert m.portfolio.loss_pause_reason() is None
+
+
+def test_loss_pause_uses_close_order_and_filters_mode_and_symbols(tmp_path):
+    m = manager(tmp_path, max_consecutive_losses=2)
+    # Older entry closes last with a win, breaking the more recent entries' losses.
+    winner = position(m.primary_bot)
+    record_close(m, "ETHUSDT", 99)
+    record_close(m, "SOLUSDT", 99)
+    m.primary_bot.db.close_trade(winner, 101, 0, "test")
+    assert m.portfolio.loss_pause_reason() is None
+    recent = m.portfolio.db.recent_portfolio_closes(mode="paper", symbols=["BTCUSDT"], limit=2)
+    assert [trade["id"] for trade in recent] == [winner]
+    assert m.portfolio.db.recent_portfolio_closes(mode="live", symbols=m.symbols, limit=2) == []

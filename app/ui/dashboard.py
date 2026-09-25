@@ -79,6 +79,7 @@ DASHBOARD_HTML = r'''<!doctype html>
       </div>
       <div class="chart-status"><span id="portfolioStatus">Portfolio —</span></div>
     </div>
+    <div class="explain" id="portfolioHoldings"></div>
     <div class="table-wrap" id="symbolOverview"><span class="muted">Loading configured markets…</span></div>
   </div>
 
@@ -302,7 +303,12 @@ function renderSymbolOverview(items,portfolio){
     $('symbolOverview').innerHTML='<span class="muted">No configured markets.</span>';
     return;
   }
-  $('portfolioStatus').textContent=`Open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${num(portfolio?.available_quote,2)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
+  $('portfolioStatus').textContent=`Bot open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${num(portfolio?.available_quote,2)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
+  const holdings=Array.isArray(portfolio?.holdings)?portfolio.holdings:[];
+  $('portfolioHoldings').textContent=portfolio?.equity==null
+    ? 'Account holdings valuation is unavailable. '+(portfolio?.error||'Waiting for fresh balances and prices.')
+    : `Configured-coin holdings: bot positions ${money(portfolio?.managed_exposure)}; outside bot positions ${money(portfolio?.unmanaged_exposure)}. Both count toward the account exposure limit. `+
+      (holdings.length?holdings.map(h=>`${h.symbol}: ${num(h.quantity,8)} total, ${num(h.unmanaged_quantity,8)} outside bot positions`).join(' | '):'No holdings in configured coins.');
   const body=rows.map(item=>{
     const risk=item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
     const status=item.error?badge('ERROR','red'):item.running?badge('RUNNING','green'):badge('STOPPED','amber');
@@ -333,7 +339,7 @@ function renderRisk(cycle){
 function renderExecution(e){
   if(!e){$('execution').innerHTML='<span class="muted">No BUY/SELL attempt has been recorded in this process.</span>';return}
   const action=String(e.action||'NONE').toUpperCase();
-  $('execution').innerHTML=`${row('Action',sideBadge(action))}${row('Result',e.success?badge('SUCCESS','green'):badge('FAILED','red'))}${row('Time',e.timestamp?new Date(e.timestamp).toLocaleString():'—')}${row('Message',esc(e.message))}${e.details?row('Details',esc(JSON.stringify(e.details))):''}`;
+  $('execution').innerHTML=`${row('Action',sideBadge(action))}${row('Result',e.success?badge('SUCCESS','green'):e.details?.order_submitted===false?badge('BLOCKED','amber'):badge('FAILED','red'))}${row('Time',e.timestamp?new Date(e.timestamp).toLocaleString():'—')}${row('Message',esc(e.message))}${e.details?row('Details',esc(JSON.stringify(e.details))):''}`;
 }
 
 function renderPosition(d){

@@ -160,3 +160,21 @@ These are conservative heuristics, not a validated profitability improvement.
 Evaluate them with fees and slippage in paper/Testnet before live use. Restart
 the application to load code/configuration changes; an existing process retains
 its loaded strategy. No risk limits or account balances need to be reset.
+
+
+### Weak trends and consecutive losses
+
+`STRATEGY_MIN_TREND_ATR=0.25` requires the fast EMA to exceed the slow EMA by
+at least one quarter of ATR before entering. This avoids entering on barely
+separated crossovers. It is a configurable heuristic, not a proven profitable rule.
+
+After `MAX_CONSECUTIVE_LOSSES=3` closed losses across configured symbols in the
+current mode, new entries pause for `LOSS_STREAK_PAUSE_SECONDS=3600` from the
+latest close. This state survives restarts through trade history. A nonlosing close
+breaks the streak. Protective exits continue during the pause; zero pause seconds
+disables this feature. History is ordered by close time, not entry order.
+
+Account exposure includes holdings outside recorded bot positions. The dashboard
+now separates these quantities and shows that an exposure rejection submitted no
+order. Zero bot positions does not mean zero account exposure. Stale valuations
+are shown as unavailable rather than misleading partial totals.

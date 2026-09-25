@@ -41,6 +41,7 @@ class TradingOrchestrator:
         self.db.init()
         self.exchange = BinanceClient(settings)
         self.strategy = EnsembleStrategy(
+            min_trend_atr=settings.strategy_min_trend_atr,
             min_volume_ratio=settings.strategy_min_volume_ratio,
             max_extension_atr=settings.strategy_max_extension_atr,
         )

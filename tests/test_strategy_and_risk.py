@@ -121,3 +121,16 @@ def test_entry_filters_do_not_suppress_bearish_exit():
         candles[column] = candles[column].iloc[::-1].to_numpy()
     candles.loc[149, "volume"] = 1
     assert EnsembleStrategy().evaluate(candles, True).side == SignalSide.SELL
+
+
+def test_weak_crossover_is_blocked_without_suppressing_established_trend():
+    candles = quality_candles()
+    shift = np.arange(len(candles)) * .025
+    for column in ["open", "high", "low", "close"]:
+        candles[column] -= shift
+    assert EnsembleStrategy(min_trend_atr=0).evaluate(candles, False).side == SignalSide.BUY
+    signal = EnsembleStrategy().evaluate(candles, False)
+    assert signal.side == SignalSide.HOLD
+    assert "trend separation" in signal.reason
+    assert 0 < signal.features["trend_separation_atr"] < .25
+    assert EnsembleStrategy().evaluate(quality_candles(), False).side == SignalSide.BUY
