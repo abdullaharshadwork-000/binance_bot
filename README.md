@@ -178,3 +178,25 @@ Account exposure includes holdings outside recorded bot positions. The dashboard
 now separates these quantities and shows that an exposure rejection submitted no
 order. Zero bot positions does not mean zero account exposure. Stale valuations
 are shown as unavailable rather than misleading partial totals.
+
+
+### Execution hardening and live-use limits
+
+See [LIVE_TRADING_READINESS.md](LIVE_TRADING_READINESS.md) for the verified
+safeguards and remaining release blockers. Automated tests validate failure
+handling; they do not establish profitable trading or certify live readiness.
+
+Non-paper BUY orders now check visible order-book depth. `MAX_ENTRY_SPREAD_BPS`
+(default 20) limits the quoted spread. `MAX_ENTRY_SLIPPAGE_BPS` (default 25)
+limits the absolute difference between estimated execution price and the sizing
+reference. Insufficient depth or a slow book response blocks the entry. Position
+and portfolio sizing budget for this non-paper slippage allowance and fees.
+Protective SELL orders are not blocked by this BUY liquidity filter. A market
+order can still fill beyond its earlier estimate after the book changes.
+
+Filled exchange orders remain unresolved until their position change is committed
+in the same SQLite transaction as the order's `ledger_applied` marker. If a crash
+or incomplete response prevents that transaction, new orders for that symbol stay
+blocked. `RECOVERY_REQUIRED` cannot be cleared merely by restarting. Compare the
+exchange order, fills, commissions and local position before any manual repair;
+do not delete the intent or reset the database to bypass a block.

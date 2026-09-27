@@ -167,3 +167,117 @@ def test_legacy_paper_balance_is_migrated_only_to_primary_symbol(tmp_path):
     assert eth._paper_quote_dec() == Decimal("750.5")
     assert btc._paper_base_dec() == Decimal("0.25")
     assert eth._paper_base_dec() == Decimal("0.0")
+
+
+def test_disabled_market_step_does_not_discard_market_maximum():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client.symbol_filters = AsyncMock(return_value={
+            "LOT_SIZE": {"stepSize": "0.001", "minQty": "0.001", "maxQty": "100"},
+            "MARKET_LOT_SIZE": {"stepSize": "0", "minQty": "0", "maxQty": "1"}})
+        assert await client.normalize_quantity_decimal("BTCUSDT", Decimal("2"), Decimal("100")) == 0
+        assert await client.normalize_quantity_decimal("BTCUSDT", Decimal("0.1234"), Decimal("100")) == Decimal("0.123")
+    asyncio.run(scenario())
+
+
+def test_market_and_regular_lot_steps_are_both_respected():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client.symbol_filters = AsyncMock(return_value={
+            "LOT_SIZE": {"stepSize": "0.003"}, "MARKET_LOT_SIZE": {"stepSize": "0.002"}})
+        assert await client.normalize_quantity_decimal("BTCUSDT", Decimal("0.011"), Decimal("100")) == Decimal("0.006")
+    asyncio.run(scenario())
+
+
+def test_market_notional_application_flags_are_respected():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client.symbol_filters = AsyncMock(return_value={"LOT_SIZE": {"stepSize": "1"},
+            "NOTIONAL": {"minNotional": "500", "maxNotional": "10", "applyMinToMarket": False, "applyMaxToMarket": False}})
+        assert await client.normalize_quantity_decimal("BTCUSDT", Decimal("1"), Decimal("100")) == 1
+    asyncio.run(scenario())
+
+
+def test_nonfinite_quantity_is_rejected_before_filter_request():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client.symbol_filters = AsyncMock()
+        for value in ["NaN", "Infinity", "-1", "0"]:
+            assert await client.normalize_quantity_decimal("BTCUSDT", Decimal(value), Decimal("100")) == 0
+        client.symbol_filters.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_exchange_client_cannot_bypass_live_or_paper_order_gate():
+    import pytest
+    async def scenario():
+        for mode in ["paper", "live"]:
+            client = BinanceClient(Settings(_env_file=None, mode=mode,
+                binance_api_key="test", binance_api_secret="test", allow_live_trading=False))
+            client._request = AsyncMock()
+            with pytest.raises(RuntimeError, match="disabled"):
+                await client.market_order("BTCUSDT", "BUY", 1)
+            client._request.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_halted_symbol_cannot_receive_market_order():
+    import pytest
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None, mode="testnet", binance_api_key="test", binance_api_secret="test"))
+        client.exchange_info = AsyncMock(return_value={"status": "HALT", "isSpotTradingAllowed": True, "orderTypes": ["MARKET"]})
+        client._request = AsyncMock()
+        with pytest.raises(RuntimeError, match="not available"):
+            await client.market_order("BTCUSDT", "BUY", 1)
+        client._request.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_rate_limit_cooldown_is_shared_between_symbol_clients():
+    import httpx
+    import pytest
+    async def scenario():
+        first = BinanceClient(Settings(_env_file=None))
+        second = BinanceClient(Settings(_env_file=None))
+        first._client = httpx.AsyncClient(base_url=first.base_url, transport=httpx.MockTransport(
+            lambda request: httpx.Response(429, headers={"Retry-After": "120"}, json={"msg": "rate limited"})))
+        second._client = httpx.AsyncClient(base_url=first.base_url, transport=httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(AssertionError("Network must not be used during cooldown"))))
+        try:
+            with pytest.raises(RuntimeError, match="429"): await first.ping()
+            with pytest.raises(RuntimeError, match="cooldown"): await second.ping()
+        finally:
+            BinanceClient._blocked_until.clear()
+            await first.close()
+            await second.close()
+    asyncio.run(scenario())
+
+
+def test_entry_depth_estimates_weighted_fill():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client._request = AsyncMock(return_value={"bids": [["99.99", "10"]],
+            "asks": [["100.01", "1"], ["100.03", "2"]]})
+        result = await client.check_entry_liquidity("BTCUSDT", 2, 100)
+        assert abs(result["estimated_fill_price"] - 100.02) < 1e-9
+    asyncio.run(scenario())
+
+
+def test_bad_entry_liquidity_is_rejected():
+    import pytest
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        books = [
+            {"bids": [], "asks": []},
+            {"bids": [["99", "10"]], "asks": [["101", "10"]]},
+            {"bids": [["99.99", "1"]], "asks": [["100.01", ".1"]]},
+            {"bids": [["101", "10"]], "asks": [["101.01", "10"]]},
+            {"bids": [["100.02", "10"]], "asks": [["100.01", "10"]]},
+            {"bids": [["99.99", "10"]], "asks": [["NaN", "10"]]},
+            {"bids": [["99.99", "10"]], "asks": [["100.02", "1"], ["100.01", "2"]]},
+        ]
+        for book in books:
+            client._request = AsyncMock(return_value=book)
+            with pytest.raises(ValueError):
+                await client.check_entry_liquidity("BTCUSDT", 1, 100)
+    asyncio.run(scenario())

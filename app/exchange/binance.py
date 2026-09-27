@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import math
 import time
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from urllib.parse import urlencode
@@ -14,6 +15,7 @@ from app.config import Settings
 
 
 class BinanceClient:
+    _blocked_until: dict[str, float] = {}
     def __init__(self, settings: Settings):
         self.settings = settings
         self.base_url = (
@@ -26,6 +28,7 @@ class BinanceClient:
             if settings.mode == "testnet"
             else "wss://stream.binance.com:9443/ws"
         )
+        self._exchange_info_cached_at = 0.0
         self._exchange_info_cache: dict | None = None
         self._client: httpx.AsyncClient | None = None
 
@@ -40,6 +43,8 @@ class BinanceClient:
             self._client = None
 
     async def _request(self, method: str, path: str, params: dict | None = None, signed: bool = False):
+        if time.monotonic() < self._blocked_until.get(self.base_url, 0):
+            raise RuntimeError("Binance rate-limit cooldown is active")
         params = dict(params or {})
         headers = {}
         if signed:
@@ -55,6 +60,14 @@ class BinanceClient:
             headers["X-MBX-APIKEY"] = self.settings.binance_api_key
 
         response = await self._http().request(method, path, params=params, headers=headers)
+        if response.status_code in {418, 429}:
+            try:
+                delay = float(response.headers.get("Retry-After", "60"))
+            except ValueError:
+                delay = 60.0
+            if not math.isfinite(delay) or delay <= 0:
+                delay = 60.0
+            self._blocked_until[self.base_url] = time.monotonic() + delay
         if response.is_error:
             raise RuntimeError(f"Binance {response.status_code}: {response.text}")
         return response.json()
@@ -84,7 +97,10 @@ class BinanceClient:
 
     async def ticker_price(self, symbol: str) -> float:
         data = await self._request("GET", "/api/v3/ticker/price", {"symbol": symbol})
-        return float(data["price"])
+        price = float(data["price"])
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Invalid Binance ticker price")
+        return price
 
     async def stream_trade_prices(self, symbol: str, on_tick) -> None:
         """Continuously stream real-time aggregate trade prices and reconnect on transient failures."""
@@ -114,8 +130,9 @@ class BinanceClient:
                 retry_delay = min(retry_delay * 2, 15.0)
 
     async def exchange_info(self, symbol: str) -> dict:
-        if self._exchange_info_cache is None:
+        if self._exchange_info_cache is None or time.monotonic() - self._exchange_info_cached_at >= 60:
             self._exchange_info_cache = await self._request("GET", "/api/v3/exchangeInfo")
+            self._exchange_info_cached_at = time.monotonic()
         for item in self._exchange_info_cache.get("symbols", []):
             if item.get("symbol") == symbol:
                 return item
@@ -136,33 +153,38 @@ class BinanceClient:
         return {f["filterType"]: f for f in info.get("filters", [])}
 
     async def normalize_quantity_decimal(self, symbol: str, quantity: Decimal, price: Decimal) -> Decimal:
+        if not quantity.is_finite() or not price.is_finite() or quantity <= 0 or price <= 0:
+            return Decimal("0")
         filters = await self.symbol_filters(symbol)
-
-        lot = filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE") or {}
-        step = Decimal(str(lot.get("stepSize", "0") or "0"))
-        min_qty = Decimal(str(lot.get("minQty", "0") or "0"))
-        max_qty = Decimal(str(lot.get("maxQty", "0") or "0"))
-
-        if step <= 0:
-            lot = filters.get("LOT_SIZE", {})
-            step = Decimal(str(lot.get("stepSize", "0.00000001") or "0.00000001"))
-            min_qty = Decimal(str(lot.get("minQty", "0") or "0"))
-            max_qty = Decimal(str(lot.get("maxQty", "0") or "0"))
-
-        normalized = (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
-        if normalized < min_qty:
-            return Decimal("0")
-        if max_qty > 0 and normalized > max_qty:
-            return Decimal("0")
-
+        lots = [filters[key] for key in ("LOT_SIZE", "MARKET_LOT_SIZE") if key in filters]
+        if not lots:
+            raise ValueError("Missing Binance quantity filters")
+        steps = [Decimal(str(lot.get("stepSize", "0"))) for lot in lots]
+        steps = [step for step in steps if step > 0]
+        normalized = quantity
+        if steps:
+            # The market filter can disable its step while keeping a max quantity.
+            # Respect both filters, including non-divisible step combinations.
+            scale = Decimal(10) ** max(0, max(-step.as_tuple().exponent for step in steps))
+            step = Decimal(math.lcm(*(int(step * scale) for step in steps))) / scale
+            normalized = (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
+        for lot in lots:
+            minimum = Decimal(str(lot.get("minQty", "0")))
+            maximum = Decimal(str(lot.get("maxQty", "0")))
+            if normalized < minimum or (maximum > 0 and normalized > maximum):
+                return Decimal("0")
         notional = normalized * price
-        notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
-        min_notional = Decimal(str(notional_filter.get("minNotional", "0") or "0"))
-        max_notional = Decimal(str(notional_filter.get("maxNotional", "0") or "0"))
-        if min_notional > 0 and notional < min_notional:
-            return Decimal("0")
-        if max_notional > 0 and notional > max_notional:
-            return Decimal("0")
+        for name in ("MIN_NOTIONAL", "NOTIONAL"):
+            rule = filters.get(name)
+            if not rule:
+                continue
+            apply_min = rule.get("applyToMarket" if name == "MIN_NOTIONAL" else "applyMinToMarket", True)
+            minimum = Decimal(str(rule.get("minNotional", "0")))
+            maximum = Decimal(str(rule.get("maxNotional", "0")))
+            if apply_min and minimum > 0 and notional < minimum:
+                return Decimal("0")
+            if rule.get("applyMaxToMarket", True) and maximum > 0 and notional > maximum:
+                return Decimal("0")
         return normalized
 
     async def normalize_quantity(self, symbol: str, quantity: float, price: float) -> float:
@@ -183,6 +205,48 @@ class BinanceClient:
 
     async def account(self) -> dict:
         return await self._request("GET", "/api/v3/account", signed=True)
+
+    async def check_entry_liquidity(self, symbol: str, quantity: float, reference_price: float) -> dict:
+        """Check visible depth before buying; this cannot guarantee the eventual market fill."""
+        if not all(math.isfinite(x) and x > 0 for x in (quantity, reference_price)):
+            raise ValueError("Invalid entry size or reference price")
+        started = time.monotonic()
+        book = await self._request("GET", "/api/v3/depth", {"symbol": symbol, "limit": 20})
+        if time.monotonic() - started > self.settings.market_data_stale_seconds:
+            raise ValueError("Order book request was too slow; resize using fresh prices")
+        try:
+            bids = [(Decimal(str(p)), Decimal(str(q))) for p, q in book["bids"]]
+            asks = [(Decimal(str(p)), Decimal(str(q))) for p, q in book["asks"]]
+            if not bids or not asks or any(not x.is_finite() or x <= 0 for level in bids + asks for x in level):
+                raise ValueError("Invalid or empty order book")
+            if any(asks[i][0] > asks[i + 1][0] for i in range(len(asks) - 1)):
+                raise ValueError("Unsorted order book")
+            if any(bids[i][0] < bids[i + 1][0] for i in range(len(bids) - 1)):
+                raise ValueError("Unsorted order book")
+        except (KeyError, TypeError, ArithmeticError) as exc:
+            raise ValueError("Invalid order book") from exc
+        bid, ask = bids[0][0], asks[0][0]
+        if bid >= ask:
+            raise ValueError("Crossed order book")
+        spread_bps = float((ask - bid) / ((ask + bid) / 2) * 10000)
+        if spread_bps > self.settings.max_entry_spread_bps:
+            raise ValueError(f"Entry spread {spread_bps:.2f} bps exceeds configured limit")
+        remaining = Decimal(str(quantity))
+        cost = Decimal("0")
+        for price, available in asks:
+            used = min(remaining, available)
+            cost += used * price
+            remaining -= used
+            if remaining == 0:
+                break
+        if remaining > 0:
+            raise ValueError("Insufficient visible order-book depth for entry size")
+        estimate = float(cost / Decimal(str(quantity)))
+        slippage_bps = (estimate / reference_price - 1) * 10000
+        if abs(slippage_bps) > self.settings.max_entry_slippage_bps:
+            raise ValueError(f"Entry price moved {slippage_bps:.2f} bps; resize using fresh prices")
+        return {"spread_bps": spread_bps, "estimated_fill_price": estimate,
+                "estimated_slippage_bps": slippage_bps}
 
     async def asset_balance(self, asset: str) -> float:
         """Return free balance. Use asset_balances() for total free + locked equity."""
@@ -212,6 +276,15 @@ class BinanceClient:
         *,
         client_order_id: str | None = None,
     ) -> dict:
+        if self.settings.mode == "paper" or (self.settings.mode == "live" and not self.settings.allow_live_trading):
+            raise RuntimeError("Exchange orders are disabled for this configuration")
+        if symbol != self.settings.symbol or side not in {"BUY", "SELL"}:
+            raise ValueError("Order symbol or side does not match configuration")
+        if not math.isfinite(quantity) or quantity <= 0:
+            raise ValueError("Order quantity must be positive and finite")
+        info = await self.exchange_info(symbol)
+        if info.get("status") != "TRADING" or not info.get("isSpotTradingAllowed") or "MARKET" not in info.get("orderTypes", []):
+            raise RuntimeError("Symbol is not available for Spot market orders")
         params = {
             "symbol": symbol,
             "side": side,

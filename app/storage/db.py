@@ -87,6 +87,10 @@ class TradingDB:
             }
             if "highest_price" not in columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN highest_price REAL")
+            order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+            if "ledger_applied" not in order_columns:
+                # Preserve historical records; every new intent explicitly starts at 0.
+                conn.execute("ALTER TABLE orders ADD COLUMN ledger_applied INTEGER NOT NULL DEFAULT 1")
 
     @staticmethod
     def _set_state_conn(conn: sqlite3.Connection, key: str, value: Any) -> None:
@@ -123,9 +127,12 @@ class TradingDB:
         stop_price: float,
         take_profit_price: float,
         state_updates: dict[str, Any] | None = None,
+        client_order_id: str | None = None,
     ) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
+            if client_order_id is not None:
+                self._apply_order_conn(conn, client_order_id, "BUY", mode, symbol)
             if state_updates:
                 for key, value in state_updates.items():
                     self._set_state_conn(conn, key, value)
@@ -174,14 +181,19 @@ class TradingDB:
         *,
         executed_quantity: float | None = None,
         state_updates: dict[str, Any] | None = None,
+        client_order_id: str | None = None,
     ) -> dict:
         with self.connection() as conn:
+            # Serialize the read and subsequent position/order writes.
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM trades WHERE id=? AND status='OPEN'",
                 (trade_id,),
             ).fetchone()
             if not row:
                 raise ValueError("Open trade not found")
+            if client_order_id is not None:
+                self._apply_order_conn(conn, client_order_id, "SELL", row["mode"], row["symbol"])
 
             position_qty = float(row["quantity"])
             sold_qty = position_qty if executed_quantity is None else min(position_qty, max(0.0, float(executed_quantity)))
@@ -450,15 +462,40 @@ class TradingDB:
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pending = conn.execute(
+                "SELECT 1 FROM orders WHERE mode=? AND symbol=? AND "
+                "(status NOT IN ('FILLED','CANCELED','REJECTED','EXPIRED','EXPIRED_IN_MATCH') "
+                "OR (executed_quantity>0 AND ledger_applied=0)) LIMIT 1", (mode, symbol),
+            ).fetchone()
+            if pending:
+                raise ValueError("An unresolved order already exists for this symbol")
+            position = conn.execute(
+                "SELECT 1 FROM trades WHERE mode=? AND symbol=? AND status='OPEN' LIMIT 1",
+                (mode, symbol),
+            ).fetchone()
+            if side not in {"BUY", "SELL"} or (side == "BUY" and position) or (side == "SELL" and not position):
+                raise ValueError("Order side conflicts with recorded position")
             conn.execute(
                 """
-                INSERT OR IGNORE INTO orders(
+                INSERT INTO orders(
                     mode, symbol, client_order_id, side, requested_quantity,
-                    status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'PENDING_SUBMIT', ?, ?)
+                    status, created_at, updated_at, ledger_applied
+                ) VALUES (?, ?, ?, ?, ?, 'PENDING_SUBMIT', ?, ?, 0)
                 """,
                 (mode, symbol, client_order_id, side, requested_quantity, now, now),
             )
+
+    @staticmethod
+    def _apply_order_conn(conn, client_order_id: str, side: str, mode: str, symbol: str) -> None:
+        updated = conn.execute(
+            "UPDATE orders SET ledger_applied=1 WHERE client_order_id=? "
+            "AND side=? AND mode=? AND symbol=? AND ledger_applied=0 "
+            "AND executed_quantity>0 AND status IN ('FILLED','CANCELED','EXPIRED','EXPIRED_IN_MATCH')",
+            (client_order_id, side, mode, symbol),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Order cannot be applied: already recorded, nonterminal, or mismatched")
 
     def update_order_record(
         self,
@@ -506,7 +543,8 @@ class TradingDB:
                 """
                 SELECT * FROM orders
                 WHERE mode=? AND symbol=?
-                  AND status IN ('PENDING_SUBMIT','UNKNOWN','NEW','PARTIALLY_FILLED','PENDING_CANCEL','RECOVERY_REQUIRED')
+                  AND (status NOT IN ('FILLED','CANCELED','REJECTED','EXPIRED','EXPIRED_IN_MATCH')
+                       OR (executed_quantity>0 AND ledger_applied=0))
                 ORDER BY id ASC
                 """,
                 (mode, symbol),

@@ -217,7 +217,8 @@ class PortfolioCoordinator:
                 equity = snapshot["equity"]
                 if equity is None:
                     return ExecutionResult("BUY", False, snapshot["error"] or "Portfolio valuation unavailable")
-                costs = 1 + (self.settings.trading_fee_bps + self.settings.paper_slippage_bps) / 10000
+                slippage_bps = self.settings.paper_slippage_bps if self.settings.mode == "paper" else self.settings.max_entry_slippage_bps
+                costs = (1 + self.settings.trading_fee_bps / 10000) * (1 + slippage_bps / 10000)
                 if not math.isfinite(notional) or notional <= 0:
                     return ExecutionResult("BUY", False, "Invalid entry notional")
                 if notional * costs > snapshot["available_quote"]:

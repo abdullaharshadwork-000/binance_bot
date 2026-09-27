@@ -47,11 +47,12 @@ class RiskManager:
 
         # Budget for both commissions and adverse execution, not just the stop.
         fee = Decimal(str(self.settings.trading_fee_bps)) / Decimal("10000")
-        slippage = Decimal(str(self.settings.paper_slippage_bps)) / Decimal("10000")
+        slippage_bps = self.settings.paper_slippage_bps if self.settings.mode == "paper" else self.settings.max_entry_slippage_bps
+        slippage = Decimal(str(slippage_bps)) / Decimal("10000")
         stop_distance = price_d * (stop_pct + 2 * fee + 2 * slippage)
         risk_budget = equity_d * risk_pct * multiplier
         qty_by_risk = risk_budget / stop_distance
-        qty_by_exposure = (equity_d * exposure_pct * multiplier) / (price_d * (1 + fee + slippage))
+        qty_by_exposure = (equity_d * exposure_pct * multiplier) / (price_d * (1 + slippage) * (1 + fee))
         quantity = min(qty_by_risk, qty_by_exposure)
 
         return RiskDecision(

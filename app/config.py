@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     min_signal_confidence: float = Field(default=0.70, ge=0.50, le=0.95)
     trading_fee_bps: float = Field(default=10.0, ge=0, le=100)
     paper_slippage_bps: float = Field(default=2.0, ge=0, le=100)
+    max_entry_spread_bps: float = Field(default=20.0, gt=0, le=100)
+    max_entry_slippage_bps: float = Field(default=25.0, gt=0, le=100)
 
     enable_adaptive_learning: bool = True
     allow_adaptive_live: bool = False

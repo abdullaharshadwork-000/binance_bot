@@ -1,4 +1,6 @@
 import uuid
+import math
+import json
 from decimal import Decimal
 
 from app.config import Settings
@@ -132,7 +134,12 @@ class Broker:
                     f"reconcile error: {reconcile_error}"
                 ) from submit_error
 
+        if (order.get("symbol") != self.settings.symbol or order.get("side") != side
+                or order.get("clientOrderId") != client_order_id):
+            raise RuntimeError("Order response identity mismatch; recovery is required")
         executed_qty = self.exchange.executed_quantity(order)
+        if not math.isfinite(executed_qty) or executed_qty < 0 or executed_qty > qty * (1 + 1e-10):
+            raise RuntimeError("Invalid executed quantity; recovery is required")
         fill_price = self.exchange.weighted_fill_price(order, 0.0) if executed_qty > 0 else None
         fee_quote = await self.exchange.order_fee_quote(order, fill_price or 0.0)
         details = self.exchange.commission_details(order)
@@ -145,6 +152,15 @@ class Broker:
             commission_quote=fee_quote,
             commission_details=details,
         )
+        if executed_qty > 0:
+            fills = order.get("fills") or []
+            complete_fills = (
+                fills and all("commission" in fill and "commissionAsset" in fill for fill in fills)
+                and math.isclose(sum(float(fill.get("qty", 0)) for fill in fills), executed_qty, rel_tol=1e-9)
+            )
+            if (order.get("status") not in {"FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH"}
+                    or not complete_fills or fill_price is None or not math.isfinite(fill_price) or fill_price <= 0):
+                raise RuntimeError("Fill details incomplete or order still active; recovery is required before further orders")
         return order, client_order_id
 
     async def reconcile_unresolved_orders(self) -> list[dict]:
@@ -158,6 +174,9 @@ class Broker:
             symbol=self.settings.symbol,
         ):
             client_order_id = str(record["client_order_id"])
+            if record["status"] == "RECOVERY_REQUIRED":
+                results.append({"client_order_id": client_order_id, "status": "RECOVERY_REQUIRED", "resolved": False})
+                continue
             try:
                 order = await self.exchange.get_order(
                     self.settings.symbol,
@@ -174,14 +193,19 @@ class Broker:
 
             executed_qty = self.exchange.executed_quantity(order)
             raw_status = str(order.get("status") or "UNKNOWN")
+            if (order.get("symbol") != self.settings.symbol
+                    or order.get("side") != record["side"]
+                    or order.get("clientOrderId") != client_order_id
+                    or not math.isfinite(executed_qty) or executed_qty < float(record["executed_quantity"])):
+                results.append({"client_order_id": client_order_id, "resolved": False,
+                                "error": "Invalid or mismatched reconciliation response"})
+                continue
             fill_price = (
                 self.exchange.weighted_fill_price(order, 0.0)
                 if executed_qty > 0 else None
             )
 
-            if executed_qty > 0 and record["status"] in {
-                "PENDING_SUBMIT", "UNKNOWN", "NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"
-            }:
+            if executed_qty > 0:
                 # We intentionally do not invent/reconstruct a position from incomplete
                 # order history. Block further trading until a human reviews it.
                 stored_status = "RECOVERY_REQUIRED"
@@ -198,15 +222,12 @@ class Broker:
                 average_fill_price=fill_price,
                 status=stored_status,
                 commission_quote=float(record.get("commission_quote") or 0.0),
-                commission_details=[],
+                commission_details=json.loads(record.get("commission_details") or "[]"),
             )
             results.append({
                 "client_order_id": client_order_id,
                 "status": stored_status,
-                "resolved": stored_status not in {
-                    "PENDING_SUBMIT", "UNKNOWN", "NEW", "PARTIALLY_FILLED",
-                    "PENDING_CANCEL", "RECOVERY_REQUIRED",
-                },
+                "resolved": stored_status in {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"},
                 "executed_quantity": executed_qty,
             })
         return results
@@ -220,6 +241,11 @@ class Broker:
         return float(total)
 
     async def enter(self, signal: StrategySignal, risk: RiskDecision, price: float) -> ExecutionResult:
+        if signal.side != SignalSide.BUY:
+            return ExecutionResult("BUY", False, "Entry requires a BUY signal")
+        if (not math.isfinite(price) or price <= 0 or not math.isfinite(risk.quantity)
+                or not math.isfinite(signal.confidence) or not 0 <= signal.confidence <= 1):
+            return ExecutionResult("BUY", False, "Invalid entry price or quantity")
         if not risk.allowed or risk.quantity <= 0:
             return ExecutionResult("BUY", False, risk.reason)
         if self.db.has_unresolved_order(mode=self.settings.mode, symbol=self.settings.symbol):
@@ -232,7 +258,7 @@ class Broker:
             return ExecutionResult("BUY", False, "Position already open")
 
         qty = await self.exchange.normalize_quantity(self.settings.symbol, risk.quantity, price)
-        if qty <= 0:
+        if not math.isfinite(qty) or qty <= 0 or qty > risk.quantity:
             return ExecutionResult("BUY", False, "Quantity violates Binance market quantity/notional filters")
 
         if self.settings.mode == "paper":
@@ -280,6 +306,10 @@ class Broker:
         if self.settings.mode == "live" and not self.settings.allow_live_trading:
             return ExecutionResult("BUY", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
 
+        try:
+            await self.exchange.check_entry_liquidity(self.settings.symbol, qty, price)
+        except ValueError as exc:
+            return ExecutionResult("BUY", False, str(exc), {"order_submitted": False})
         order, client_order_id = await self._submit_market_order("BUY", qty)
         executed_qty = self.exchange.executed_quantity(order)
         if executed_qty <= 0:
@@ -307,6 +337,7 @@ class Broker:
             reason=signal.reason,
             stop_price=stop_price,
             take_profit_price=take_profit_price,
+            client_order_id=client_order_id,
         )
         return ExecutionResult(
             "BUY",
@@ -326,6 +357,8 @@ class Broker:
         )
 
     async def maybe_exit(self, signal: StrategySignal, price: float) -> ExecutionResult:
+        if not math.isfinite(price) or price <= 0:
+            return ExecutionResult("HOLD", False, "Invalid exit price; awaiting valid market data")
         trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
         if not trade:
             return ExecutionResult("HOLD", True, "No open position")
@@ -447,6 +480,7 @@ class Broker:
             fee,
             reason,
             executed_quantity=executed_qty,
+            client_order_id=client_order_id,
         )
         return ExecutionResult(
             "SELL",
