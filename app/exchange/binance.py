@@ -318,6 +318,16 @@ class BinanceClient:
             signed=True,
         )
 
+    async def my_trades(self, symbol: str, *, order_id: int | str) -> list[dict]:
+        """Fetch account fills for one order so restart recovery can verify commissions."""
+        data = await self._request(
+            "GET",
+            "/api/v3/myTrades",
+            {"symbol": symbol, "orderId": order_id, "limit": 1000},
+            signed=True,
+        )
+        return list(data or [])
+
     @staticmethod
     def _format_qty(quantity: float) -> str:
         return format(Decimal(str(quantity)).normalize(), "f")
