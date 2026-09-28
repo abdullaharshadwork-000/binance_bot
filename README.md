@@ -28,8 +28,9 @@ A 15-minute strategy should not produce 900 separate decisions from the same can
 ## Recommended first configuration
 
 ```env
-MODE=paper
+MODE=testnet
 ALLOW_LIVE_TRADING=false
+LIVE_PROTECTION_VALIDATED=false
 SYMBOL=BTCUSDT
 BASE_ASSET=BTC
 QUOTE_ASSET=USDT
@@ -142,9 +143,9 @@ Multi-symbol live trading has a separate `ALLOW_MULTI_SYMBOL_LIVE` safety gate a
 
 ## Important
 
-Fast monitoring reduces avoidable software delay, but it does not guarantee a profitable fill or eliminate network latency, exchange latency, slippage, gaps, or losses. Paper results can differ from live results.
+Fast monitoring reduces avoidable software delay, but it does not guarantee a profitable fill or eliminate network latency, exchange latency, slippage, gaps, or losses. Testnet results can still differ from live fills, liquidity and operational conditions.
 
-Trailing protection is evaluated by the running bot and is not an exchange-resident stop order. After the configured activation gain, the persisted stop follows the highest observed price at the configured distance; after the earlier breakeven activation it cannot fall below entry. Keep the process running and validate all parameters in paper and Testnet modes before considering live use.
+Trailing protection is evaluated by the running bot and is not an exchange-resident stop order. After the configured activation gain, the persisted stop follows the highest observed price at the configured distance; after the earlier breakeven activation it cannot fall below entry. Keep the process running and validate all parameters in Binance Spot Testnet before considering live use.
 
 
 ### Entry quality and decision reporting
@@ -157,7 +158,7 @@ produce HOLD rather than silently evaluating an older candle. The risk status
 reports the final rejection if the portfolio guard or broker blocks an entry.
 
 These are conservative heuristics, not a validated profitability improvement.
-Evaluate them with fees and slippage in paper/Testnet before live use. Restart
+Evaluate them with real Testnet fills, fees and slippage before live use. Restart
 the application to load code/configuration changes; an existing process retains
 its loaded strategy. No risk limits or account balances need to be reset.
 
@@ -254,6 +255,6 @@ to exit earlier, the bot first reconciles and cancels the OCO before submitting
 a market SELL, including the race where the OCO fills while cancellation is in
 flight.
 
-This path is currently Testnet-only. Live order execution remains blocked until
+The same protection path is used by both Testnet and live exchange modes. Live order execution still requires `ALLOW_LIVE_TRADING=true` and `LIVE_PROTECTION_VALIDATED=true`; keep both live gates disabled until
 the OCO lifecycle has been validated with restart, timeout, partial-fill and
 network-failure scenarios on Binance Spot Testnet.
