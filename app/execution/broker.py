@@ -721,7 +721,10 @@ class Broker:
                 f"{self.settings.base_asset} exceeds exchange total {total:.12g}. "
                 "Trading is blocked for this position until account/order history is reconciled."
             )
-        elif free + tolerance < recorded:
+        elif (
+            free + tolerance < recorded
+            and not trade.get("protective_list_client_order_id")
+        ):
             self._inventory_issue = (
                 f"Position reconciliation required: {locked:.12g} "
                 f"{self.settings.base_asset} is locked outside the bot's local position state. "
@@ -842,6 +845,10 @@ class Broker:
         if self.settings.mode == "live" and not self.settings.allow_live_trading:
             return ExecutionResult("SELL", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
 
+        inventory_issue = await self._position_inventory_issue(trade)
+        if inventory_issue is not None:
+            return ExecutionResult("SELL", False, inventory_issue)
+
         if self.settings.mode == "testnet":
             protective_fill = await self._cancel_exchange_protection(trade)
             if protective_fill is not None:
@@ -859,10 +866,6 @@ class Broker:
                     "Position was already closed by exchange protection",
                 )
             qty = float(trade["quantity"])
-
-        inventory_issue = await self._position_inventory_issue(trade)
-        if inventory_issue is not None:
-            return ExecutionResult("SELL", False, inventory_issue)
 
         available = await self.exchange.asset_balance(self.settings.base_asset)
         requested_qty = min(qty, available)
