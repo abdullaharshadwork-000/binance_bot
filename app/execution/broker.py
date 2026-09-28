@@ -397,6 +397,181 @@ class Broker:
                 total += Decimal(str(fill.get("commission") or "0"))
         return float(total)
 
+    def _new_protection_ids(self) -> tuple[str, str, str]:
+        token = uuid.uuid4().hex[:16]
+        return (
+            f"agt-prot-{token}",
+            f"agt-tp-{token}",
+            f"agt-sl-{token}",
+        )
+
+    async def _place_exchange_protection(self, trade: dict) -> dict:
+        if self.settings.mode != "testnet":
+            return {"protected": False, "status": "NOT_APPLICABLE"}
+        if trade.get("protective_list_client_order_id"):
+            return {
+                "protected": True,
+                "status": trade.get("protection_status") or "UNKNOWN",
+                "list_client_order_id": trade["protective_list_client_order_id"],
+                "order_list_id": trade.get("protective_order_list_id"),
+            }
+
+        quantity = float(trade["quantity"])
+        take_profit = float(trade["take_profit_price"])
+        stop_price = float(trade["stop_price"])
+        list_id, take_id, stop_id = self._new_protection_ids()
+
+        try:
+            response = await self.exchange.place_protective_oco(
+                self.settings.symbol,
+                quantity=quantity,
+                take_profit_price=take_profit,
+                stop_price=stop_price,
+                list_client_order_id=list_id,
+                take_profit_client_order_id=take_id,
+                stop_client_order_id=stop_id,
+            )
+        except Exception as submit_error:
+            try:
+                response = await self.exchange.get_order_list(
+                    self.settings.symbol,
+                    list_client_order_id=list_id,
+                )
+            except Exception as reconcile_error:
+                self.db.set_trade_protection(
+                    int(trade["id"]),
+                    order_list_id=None,
+                    list_client_order_id=list_id,
+                    status="PROTECTION_UNKNOWN",
+                )
+                raise RuntimeError(
+                    "Protective OCO outcome is uncertain; position requires "
+                    f"reconciliation. Submit error: {submit_error}; "
+                    f"reconcile error: {reconcile_error}"
+                ) from submit_error
+
+        if response.get("symbol") != self.settings.symbol:
+            raise RuntimeError("Protective OCO response symbol mismatch")
+        response_list_id = response.get("listClientOrderId") or list_id
+        if response_list_id != list_id:
+            raise RuntimeError("Protective OCO client id mismatch")
+        order_list_id = response.get("orderListId")
+        status = str(response.get("listOrderStatus") or response.get("listStatusType") or "EXECUTING")
+        self.db.set_trade_protection(
+            int(trade["id"]),
+            order_list_id=order_list_id,
+            list_client_order_id=list_id,
+            status=status,
+        )
+        return {
+            "protected": True,
+            "status": status,
+            "list_client_order_id": list_id,
+            "order_list_id": order_list_id,
+        }
+
+    async def _protective_fill(self, trade: dict) -> dict | None:
+        list_client_id = trade.get("protective_list_client_order_id")
+        if not list_client_id or self.settings.mode != "testnet":
+            return None
+        order_list = await self.exchange.get_order_list(
+            self.settings.symbol,
+            list_client_order_id=str(list_client_id),
+        )
+        list_status = str(
+            order_list.get("listOrderStatus")
+            or order_list.get("listStatusType")
+            or "UNKNOWN"
+        )
+        self.db.set_trade_protection(
+            int(trade["id"]),
+            order_list_id=order_list.get("orderListId"),
+            list_client_order_id=str(list_client_id),
+            status=list_status,
+        )
+
+        for child in order_list.get("orders") or []:
+            client_id = child.get("clientOrderId")
+            if not client_id:
+                continue
+            order = await self.exchange.get_order(
+                self.settings.symbol,
+                client_order_id=str(client_id),
+            )
+            executed_qty = self.exchange.executed_quantity(order)
+            if str(order.get("status")) != "FILLED" or executed_qty <= 0:
+                continue
+
+            trades = await self.exchange.my_trades(
+                self.settings.symbol,
+                order_id=order["orderId"],
+            )
+            fills = [
+                {
+                    "price": str(item.get("price") or "0"),
+                    "qty": str(item.get("qty") or "0"),
+                    "commission": str(item.get("commission") or "0"),
+                    "commissionAsset": str(item.get("commissionAsset") or ""),
+                }
+                for item in trades
+                if str(item.get("orderId")) == str(order.get("orderId"))
+            ]
+            verified = dict(order)
+            verified["fills"] = fills
+            fill_price = self.exchange.weighted_fill_price(
+                verified,
+                float(order.get("price") or 0) or float(trade["stop_price"]),
+            )
+            if not math.isfinite(fill_price) or fill_price <= 0:
+                raise RuntimeError("Protective fill price could not be verified")
+            fee = await self.exchange.order_fee_quote(verified, fill_price)
+            reason = (
+                "Exchange take profit"
+                if "TAKE_PROFIT" in str(order.get("type"))
+                or (
+                    float(order.get("price") or 0) > 0
+                    and fill_price >= float(trade["entry_price"])
+                )
+                else "Exchange stop loss"
+            )
+            closed = self.db.close_trade(
+                int(trade["id"]),
+                fill_price,
+                fee,
+                reason,
+                executed_quantity=executed_qty,
+            )
+            return {
+                "closed": closed,
+                "fill_price": fill_price,
+                "exit_fee_quote": fee,
+                "order": order,
+                "reason": reason,
+            }
+
+        return None
+
+    async def _cancel_exchange_protection(self, trade: dict) -> None:
+        list_client_id = trade.get("protective_list_client_order_id")
+        if self.settings.mode != "testnet" or not list_client_id:
+            return
+        try:
+            await self.exchange.cancel_order_list(
+                self.settings.symbol,
+                list_client_order_id=str(list_client_id),
+            )
+        except Exception:
+            fill = await self._protective_fill(trade)
+            if fill is not None:
+                raise RuntimeError(
+                    "Protective order filled while software exit was being prepared"
+                )
+            raise
+        self.db.clear_trade_protection(
+            int(trade["id"]),
+            status="CANCELED_FOR_SOFTWARE_EXIT",
+        )
+
     async def enter(self, signal: StrategySignal, risk: RiskDecision, price: float) -> ExecutionResult:
         if signal.side != SignalSide.BUY:
             return ExecutionResult("BUY", False, "Entry requires a BUY signal")
@@ -496,6 +671,11 @@ class Broker:
             take_profit_price=take_profit_price,
             client_order_id=client_order_id,
         )
+        protection = None
+        if self.settings.mode == "testnet":
+            protection = await self._place_exchange_protection(
+                self.db.get_open_trade(self.settings.symbol, self.settings.mode)
+            )
         return ExecutionResult(
             "BUY",
             True,
@@ -510,6 +690,7 @@ class Broker:
                 "entry_fee_quote": fee,
                 "commissions": self.exchange.commission_details(order),
                 "order": order,
+                "protection": protection,
             },
         )
 
@@ -557,6 +738,19 @@ class Broker:
                 False,
                 "An earlier Binance order has an unresolved outcome; duplicate exit submission is blocked",
             )
+
+        if self.settings.mode == "testnet":
+            if not trade.get("protective_list_client_order_id"):
+                await self._place_exchange_protection(trade)
+                trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
+            protective_fill = await self._protective_fill(trade)
+            if protective_fill is not None:
+                return ExecutionResult(
+                    "SELL",
+                    True,
+                    protective_fill["reason"],
+                    protective_fill,
+                )
 
         reason = None
         original_stop = float(trade["stop_price"])
@@ -642,6 +836,16 @@ class Broker:
 
         if self.settings.mode == "live" and not self.settings.allow_live_trading:
             return ExecutionResult("SELL", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
+
+        if self.settings.mode == "testnet":
+            await self._cancel_exchange_protection(trade)
+            trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
+            if trade is None:
+                return ExecutionResult(
+                    "SELL",
+                    True,
+                    "Position was already closed by exchange protection",
+                )
 
         inventory_issue = await self._position_inventory_issue(trade)
         if inventory_issue is not None:
