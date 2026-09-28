@@ -344,10 +344,10 @@ def test_runtime_lock_prevents_second_process_owner_for_same_database(tmp_path):
         first.release()
 
 
-def test_live_order_execution_is_blocked_until_exchange_protection_exists():
+def test_live_order_execution_requires_validated_exchange_protection():
     import pytest
 
-    with pytest.raises(ValueError, match="exchange-resident"):
+    with pytest.raises(ValueError, match="LIVE_PROTECTION_VALIDATED"):
         Settings(
             _env_file=None,
             mode="live",
@@ -355,3 +355,42 @@ def test_live_order_execution_is_blocked_until_exchange_protection_exists():
             binance_api_key="test",
             binance_api_secret="test",
         )
+
+
+def test_live_oco_client_uses_same_spot_order_list_path():
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="live",
+            allow_live_trading=True,
+            live_protection_validated=True,
+            binance_api_key="test",
+            binance_api_secret="test",
+        )
+        client = BinanceClient(settings)
+        client._request = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 77,
+            "listClientOrderId": "live-protection",
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
+            "orders": [],
+        })
+
+        result = await client.place_protective_oco(
+            "BTCUSDT",
+            quantity=0.01,
+            take_profit_price=110,
+            stop_price=95,
+            list_client_order_id="live-protection",
+            take_profit_client_order_id="live-tp",
+            stop_client_order_id="live-sl",
+        )
+
+        assert result["orderListId"] == 77
+        args = client._request.await_args.args
+        assert args[0] == "POST"
+        assert args[1] == "/api/v3/orderList/oco"
+        assert client.base_url == "https://api.binance.com"
+
+    asyncio.run(scenario())
