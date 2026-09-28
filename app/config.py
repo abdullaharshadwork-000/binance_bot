@@ -116,17 +116,17 @@ class Settings(BaseSettings):
                     f"Multi-symbol entry {symbol} must end with QUOTE_ASSET={self.quote_asset}"
                 )
 
+        if len(parsed_symbols) > 1 and self.mode == "live" and not self.allow_multi_symbol_live:
+            raise ValueError(
+                "Multi-symbol live trading is blocked. Keep ALLOW_MULTI_SYMBOL_LIVE=false "
+                "until the multi-symbol engine has been validated in Testnet."
+            )
+
         if self.mode == "live" and self.allow_live_trading:
             raise ValueError(
                 "Live order execution is intentionally blocked until exchange-resident "
                 "protective orders and restart-safe protection reconciliation are implemented. "
                 "Use MODE=testnet for execution testing."
-            )
-
-        if len(parsed_symbols) > 1 and self.mode == "live" and not self.allow_multi_symbol_live:
-            raise ValueError(
-                "Multi-symbol live trading is blocked. Keep ALLOW_MULTI_SYMBOL_LIVE=false "
-                "until the multi-symbol engine has been validated in Testnet."
             )
 
         if self.mode in {"testnet", "live"} and not (
