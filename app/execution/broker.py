@@ -406,7 +406,7 @@ class Broker:
         )
 
     async def _place_exchange_protection(self, trade: dict) -> dict:
-        if self.settings.mode != "testnet":
+        if self.settings.mode not in {"testnet", "live"}:
             return {"protected": False, "status": "NOT_APPLICABLE"}
         if trade.get("protective_list_client_order_id"):
             return {
@@ -472,7 +472,7 @@ class Broker:
 
     async def _protective_fill(self, trade: dict) -> dict | None:
         list_client_id = trade.get("protective_list_client_order_id")
-        if not list_client_id or self.settings.mode != "testnet":
+        if not list_client_id or self.settings.mode not in {"testnet", "live"}:
             return None
         order_list = await self.exchange.get_order_list(
             self.settings.symbol,
@@ -568,7 +568,7 @@ class Broker:
 
     async def _cancel_exchange_protection(self, trade: dict) -> dict | None:
         list_client_id = trade.get("protective_list_client_order_id")
-        if self.settings.mode != "testnet" or not list_client_id:
+        if self.settings.mode not in {"testnet", "live"} or not list_client_id:
             return None
         try:
             await self.exchange.cancel_order_list(
@@ -713,7 +713,7 @@ class Broker:
             client_order_id=client_order_id,
         )
         protection = None
-        if self.settings.mode == "testnet":
+        if self.settings.mode in {"testnet", "live"}:
             protection = await self._place_exchange_protection(
                 self.db.get_open_trade(self.settings.symbol, self.settings.mode)
             )
@@ -783,10 +783,10 @@ class Broker:
                 "An earlier Binance order has an unresolved outcome; duplicate exit submission is blocked",
             )
 
-        if self.settings.mode == "testnet":
-            if not trade.get("protective_list_client_order_id"):
-                await self._place_exchange_protection(trade)
-                trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
+        if (
+            self.settings.mode in {"testnet", "live"}
+            and trade.get("protective_list_client_order_id")
+        ):
             protective_fill = await self._protective_fill(trade)
             if protective_fill is not None:
                 return ExecutionResult(
@@ -843,6 +843,17 @@ class Broker:
                     )
 
         if not reason:
+            if (
+                self.settings.mode in {"testnet", "live"}
+                and not trade.get("protective_list_client_order_id")
+            ):
+                protection = await self._place_exchange_protection(trade)
+                return ExecutionResult(
+                    "HOLD",
+                    True,
+                    "Open position retained; exchange protection installed",
+                    protection,
+                )
             return ExecutionResult("HOLD", True, "Open position retained")
 
         qty = float(trade["quantity"])
@@ -885,7 +896,7 @@ class Broker:
         if inventory_issue is not None:
             return ExecutionResult("SELL", False, inventory_issue)
 
-        if self.settings.mode == "testnet":
+        if self.settings.mode in {"testnet", "live"}:
             protective_fill = await self._cancel_exchange_protection(trade)
             if protective_fill is not None:
                 return ExecutionResult(
