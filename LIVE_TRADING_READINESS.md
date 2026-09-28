@@ -1,8 +1,9 @@
 # Live trading readiness
 
-Status: execution safeguards strengthened; live order execution is intentionally
-blocked until exchange-resident protective orders and restart-safe protection
-reconciliation are implemented. No winning-trade guarantee is possible. The
+Status: exchange-resident OCO protection and restart reconciliation are implemented
+in the shared Testnet/live execution path. Live execution remains gated behind
+ALLOW_LIVE_TRADING=true and LIVE_PROTECTION_VALIDATED=true until the same path is
+validated against Binance Spot Testnet failure scenarios. No winning-trade guarantee is possible. The
 existing strategy score is a heuristic, not a measured probability of profit.
 
 ## Implemented and tested
@@ -32,11 +33,11 @@ exchange responses and temporary databases; they do not place exchange orders.
 
 ## Remaining blockers and limitations
 
-1. Stops and take-profit exits are still local software checks. Because they cannot
-   protect a position while the machine, network or process is down, configuration
-   validation now refuses ALLOW_LIVE_TRADING=true. Testnet remains available for
-   execution testing until exchange-held protective orders, lifecycle management,
-   and restart reconciliation are implemented.
+1. Hard stop-loss and take-profit protection now use Binance Spot OCO order lists
+   in both Testnet and live-capable code. Live execution remains gated until the
+   OCO lifecycle, restart recovery, cancellation races, and failure handling are
+   validated on Spot Testnet. Software trailing/breakeven exits remain an additional
+   layer and cancel/reconcile the OCO before a market exit.
 2. No substantial out-of-sample or forward-trading evidence demonstrates an edge
    after fees, spread and slippage. Three historical losing trades are insufficient
    to select or validate parameters. Test filters on unseen data and different
@@ -56,10 +57,9 @@ exchange responses and temporary databases; they do not place exchange orders.
 
 ## Verification before real funds
 
-Keep using paper/Testnet. Exercise restart/network-loss recovery and partial fills,
-reconcile positions and fees with exchange history, implement exchange-held
-protection, and collect a documented forward-test sample and untouched historical
-holdout results. Define tolerable drawdown and operating limits before testing.
+Keep using Binance Spot Testnet. Exercise restart/network-loss recovery, OCO
+placement/cancellation, partial fills, locked balances, and account reconciliation,
+then collect a documented forward-test sample and untouched historical holdout results. Define tolerable drawdown and operating limits before testing.
 Passing unit tests alone is not a reason to enable ALLOW_LIVE_TRADING.
 
 API behavior references:

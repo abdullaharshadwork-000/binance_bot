@@ -10,9 +10,16 @@ from app.models import RiskDecision, SignalSide, StrategySignal
 from app.storage.db import TradingDB
 
 
-def make_broker(tmp_path):
-    settings = Settings(_env_file=None, mode="testnet", binance_api_key="test",
-                        binance_api_secret="test", database_path=str(tmp_path / "db"))
+def make_broker(tmp_path, mode="testnet"):
+    settings = Settings(
+        _env_file=None,
+        mode=mode,
+        allow_live_trading=(mode == "live"),
+        live_protection_validated=(mode == "live"),
+        binance_api_key="test",
+        binance_api_secret="test",
+        database_path=str(tmp_path / f"{mode}.db"),
+    )
     db = TradingDB(settings.database_path)
     db.init()
     exchange = BinanceClient(settings)
@@ -418,5 +425,76 @@ def test_restart_recreates_missing_protection_for_open_testnet_trade(tmp_path):
         broker.exchange.place_protective_oco.assert_awaited_once()
         trade = broker.db.get_open_trade("BTCUSDT", "testnet")
         assert trade["protective_list_client_order_id"] is not None
+
+    asyncio.run(scenario())
+
+
+def test_live_buy_uses_same_exchange_protection_flow(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path, mode="live")
+        result = await buy(broker)
+
+        assert result.success is True
+        broker.exchange.place_protective_oco.assert_awaited_once()
+        trade = broker.db.get_open_trade("BTCUSDT", "live")
+        assert trade is not None
+        assert trade["protective_list_client_order_id"].startswith("agt-prot-")
+        assert trade["protection_status"] == "EXECUTING"
+
+    asyncio.run(scenario())
+
+
+def test_live_missing_protection_is_restored_while_position_is_inside_hard_exits(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path, mode="live")
+        broker.db.open_trade(
+            mode="live",
+            symbol="BTCUSDT",
+            quantity=1,
+            entry_price=100,
+            entry_fee=0,
+            reason="restored live position",
+            stop_price=95,
+            take_profit_price=110,
+        )
+
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0, "hold"),
+            100,
+        )
+
+        assert result.action == "HOLD"
+        assert result.success is True
+        broker.exchange.place_protective_oco.assert_awaited_once()
+        trade = broker.db.get_open_trade("BTCUSDT", "live")
+        assert trade["protective_list_client_order_id"] is not None
+
+    asyncio.run(scenario())
+
+
+def test_live_unprotected_position_beyond_stop_sells_instead_of_trying_new_oco(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path, mode="live")
+        broker.db.open_trade(
+            mode="live",
+            symbol="BTCUSDT",
+            quantity=1,
+            entry_price=100,
+            entry_fee=0,
+            reason="emergency live position",
+            stop_price=95,
+            take_profit_price=110,
+        )
+
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0, "hold"),
+            94,
+        )
+
+        assert result.action == "SELL"
+        assert result.success is True
+        broker.exchange.place_protective_oco.assert_not_awaited()
+        assert broker.exchange.market_order.await_count == 1
+        assert broker.db.get_open_trade("BTCUSDT", "live") is None
 
     asyncio.run(scenario())
