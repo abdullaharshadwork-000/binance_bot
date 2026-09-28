@@ -61,27 +61,39 @@ class EnsembleStrategy:
             "trend_separation_atr": float((x.ema_fast - x.ema_slow) / x.atr) if x.atr > 0 else 0.0,
         }
 
+        checks = {
+            "Fast EMA above slow EMA": bool(x.ema_fast > x.ema_slow),
+            "Close above fast EMA": bool(x.close > x.ema_fast),
+            "Positive 5-candle momentum": momentum > 0,
+            "RSI between 43 and 70": 43 <= rsi <= 70,
+            "Sufficient EMA separation": features["trend_separation_atr"] >= self.min_trend_atr,
+            "Sufficient relative volume": volume_ratio >= self.min_volume_ratio,
+            "Price not overextended": bool(x.atr > 0 and (x.close - x.ema_fast) <= self.max_extension_atr * x.atr),
+        }
+
         if not has_position and bullish and 43 <= rsi <= 70:
             if features["trend_separation_atr"] < self.min_trend_atr:
-                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak EMA trend separation", features)
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak EMA trend separation", features, entry_checks=checks)
             if volume_ratio < self.min_volume_ratio:
-                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak relative volume", features)
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak relative volume", features, entry_checks=checks)
             if x.atr <= 0 or (x.close - x.ema_fast) > self.max_extension_atr * x.atr:
-                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: price extended above EMA trend", features)
-            confidence = 0.55
-            confidence += min(abs(trend_strength) * 35, 0.12)
-            confidence += min(max(momentum, 0) * 8, 0.10)
-            if volume_ratio > 1.05:
-                confidence += 0.05
-            if fresh_bull_cross:
-                confidence += 0.08
-            if atr_pct > 0.04:
-                confidence -= 0.08
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: price extended above EMA trend", features, entry_checks=checks)
+            components = {
+                "Base qualifying setup": 0.55,
+                "EMA strength": min(abs(trend_strength) * 35, 0.12),
+                "Momentum": min(max(momentum, 0) * 8, 0.10),
+                "Volume bonus": 0.05 if volume_ratio > 1.05 else 0.0,
+                "Fresh crossover bonus": 0.08 if fresh_bull_cross else 0.0,
+                "High volatility penalty": -0.08 if atr_pct > 0.04 else 0.0,
+            }
+            confidence = sum(components.values())
             return StrategySignal(
                 SignalSide.BUY,
                 max(0.0, min(confidence, 0.95)),
                 "Bullish EMA trend with positive momentum and acceptable RSI",
                 features,
+                entry_checks=checks,
+                score_components=components,
             )
 
         if has_position and (bearish or fresh_bear_cross or rsi >= 76):
@@ -97,6 +109,9 @@ class EnsembleStrategy:
                 min(confidence, 0.95),
                 "Exit signal from bearish trend/cross or overbought RSI",
                 features,
+                entry_checks=checks,
             )
 
-        return StrategySignal(SignalSide.HOLD, 0.50, "No sufficiently strong setup", features)
+        failed = [name for name, passed in checks.items() if not passed]
+        reason = "Position retained; no strategy exit" if has_position else "Entry requirements not met: " + "; ".join(failed)
+        return StrategySignal(SignalSide.HOLD, 0.0, reason, features, entry_checks=checks)

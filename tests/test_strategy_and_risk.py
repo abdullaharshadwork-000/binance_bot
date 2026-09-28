@@ -134,3 +134,51 @@ def test_weak_crossover_is_blocked_without_suppressing_established_trend():
     assert "trend separation" in signal.reason
     assert 0 < signal.features["trend_separation_atr"] < .25
     assert EnsembleStrategy().evaluate(quality_candles(), False).side == SignalSide.BUY
+
+
+def test_indicator_values_match_independent_recursive_calculation():
+    from app.strategy.indicators import enrich
+    candles = quality_candles()
+    closes = candles.close.tolist()
+    def smooth(values, alpha):
+        result = values[0]
+        for value in values[1:]:
+            result = alpha * value + (1 - alpha) * result
+        return result
+    delta = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gain = smooth([max(value, 0) for value in delta], 1 / 14)
+    loss = smooth([max(-value, 0) for value in delta], 1 / 14)
+    true_ranges = []
+    for i, row in enumerate(candles.itertuples()):
+        previous = closes[i - 1] if i else row.close
+        true_ranges.append(max(row.high - row.low, abs(row.high - previous), abs(row.low - previous)))
+    x = enrich(candles).iloc[-1]
+    assert x.ema_fast == pytest.approx(smooth(closes, 2 / 21), rel=1e-12)
+    assert x.ema_slow == pytest.approx(smooth(closes, 2 / 51), rel=1e-12)
+    assert x.rsi == pytest.approx(100 - 100 / (1 + gain / loss), rel=1e-12)
+    assert x.atr == pytest.approx(smooth(true_ranges, 1 / 14), rel=1e-12)
+    assert x.momentum_5 == pytest.approx(closes[-1] / closes[-6] - 1)
+    assert x.volume_ratio == pytest.approx(candles.volume.iloc[-1] / (sum(candles.volume.iloc[-20:]) / 20))
+
+
+def test_hold_has_no_placeholder_score_and_identifies_failed_conditions():
+    candles = make_candles()
+    signal = EnsembleStrategy().evaluate(candles, False)
+    assert signal.side == SignalSide.HOLD
+    assert signal.confidence == 0
+    assert signal.entry_checks["RSI between 43 and 70"] is False
+    assert "RSI between 43 and 70" in signal.reason
+    assert not signal.score_components
+
+
+def test_buy_score_components_sum_to_reported_score():
+    signal = EnsembleStrategy().evaluate(quality_candles(), False)
+    assert signal.side == SignalSide.BUY
+    assert all(signal.entry_checks.values())
+    assert signal.confidence == pytest.approx(min(.95, max(0, sum(signal.score_components.values()))))
+    f = signal.features
+    expected = .55 + min(abs(f["trend_strength"]) * 35, .12) + min(max(f["momentum_5"], 0) * 8, .10)
+    expected += .05 if f["volume_ratio"] > 1.05 else 0
+    expected += signal.score_components["Fresh crossover bonus"]
+    expected -= .08 if f["atr_pct"] > .04 else 0
+    assert signal.confidence == pytest.approx(expected)

@@ -222,3 +222,19 @@ exchange orders, LLM calls and adaptive learning for this launch, and preserves
 configured markets and risk limits. Open the dashboard and start the simulation.
 A valid BUY setup is still required; paper mode does not force trades. Running
 `python run.py` again uses the normal configuration.
+
+
+### Verify the strategy calculation
+
+HOLD no longer carries the old fixed 0.50 confidence placeholder; it has no
+trade score. The decision panel lists each entry condition as PASS or BLOCKED.
+BUY signals include the base score, EMA-strength and momentum contributions,
+volume/crossover bonuses and volatility penalty. The displayed entry threshold
+is a separate risk check. Scores are heuristic, not probabilities of winning.
+
+Indicators and signals refresh from completed strategy candles (every five
+minutes when `INTERVAL=5m`), not from elapsed runtime. EMA uses recursive
+exponential smoothing; RSI and ATR use alpha 1/14 with the initial observation
+as the seed. Chart providers using Wilder's initial 14-period average or a different
+history length can differ. Regression tests compare EMA, RSI, ATR, momentum and
+volume ratios against independent arithmetic and verify the score breakdown.

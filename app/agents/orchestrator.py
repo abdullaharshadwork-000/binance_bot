@@ -536,6 +536,8 @@ class TradingOrchestrator:
                 "confidence": round(signal.confidence, 4),
                 "reason": signal.reason,
                 "features": signal.features,
+                "entry_checks": signal.entry_checks,
+                "score_components": signal.score_components,
             },
             "llm": {
                 "adjustment": self.cached_llm_adjustment,
@@ -631,6 +633,8 @@ class TradingOrchestrator:
                     "confidence": round(signal.confidence, 4),
                     "reason": signal.reason,
                     "features": signal.features,
+                    "entry_checks": signal.entry_checks,
+                    "score_components": signal.score_components,
                 },
                 "llm": {
                     "adjustment": float(candidate["llm_adjustment"]),

@@ -15,6 +15,8 @@ class StrategySignal:
     confidence: float
     reason: str
     features: dict[str, float] = field(default_factory=dict)
+    entry_checks: dict[str, bool] = field(default_factory=dict)
+    score_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

@@ -332,6 +332,8 @@ function renderDecision(cycle){
     </div>
     <div class="metric-note">Local strategy score from completed candles; not a win probability. Futures liquidity scores from other apps use different inputs and may not be comparable.</div>
     <div class="explain"><b>Why:</b> ${esc(s.reason)}</div>
+    <div>${Object.entries(s.entry_checks||{}).map(([name,passed])=>row(esc(name),passed?badge('PASS','green'):badge('BLOCKED','amber'))).join('')}</div>
+    ${s.side==='BUY'?'<div class="explain"><b>Entry score calculation:</b> '+Object.entries(s.score_components||{}).map(([name,value])=>esc(name)+': '+num(value*100,2)).join(' + ')+' points before score cap or advisor adjustment.</div>':''}
     <div style="margin-top:10px">${row('RSI',num(f.rsi,2))}${row('Fast EMA',num(f.ema_fast,2))}${row('Slow EMA',num(f.ema_slow,2))}${row('5-candle momentum',pct(f.momentum_5))}${row('Volume ratio',num(f.volume_ratio,2)+'×')}${row('ATR / volatility',pct(f.atr_pct))}</div>`;
 }
 
