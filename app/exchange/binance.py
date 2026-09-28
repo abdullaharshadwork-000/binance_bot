@@ -318,6 +318,82 @@ class BinanceClient:
             signed=True,
         )
 
+    async def place_protective_oco(
+        self,
+        symbol: str,
+        *,
+        quantity: float,
+        take_profit_price: float,
+        stop_price: float,
+        list_client_order_id: str,
+        take_profit_client_order_id: str,
+        stop_client_order_id: str,
+    ) -> dict:
+        if self.settings.mode != "testnet":
+            raise RuntimeError(
+                "Exchange-resident protection is enabled for Testnet validation only"
+            )
+        if symbol != self.settings.symbol:
+            raise ValueError("Protective order symbol does not match configuration")
+        if not all(
+            math.isfinite(x) and x > 0
+            for x in (quantity, take_profit_price, stop_price)
+        ):
+            raise ValueError("Protective order values must be positive and finite")
+        if stop_price >= take_profit_price:
+            raise ValueError("Protective stop must be below take-profit price")
+
+        return await self._request(
+            "POST",
+            "/api/v3/orderList/oco",
+            {
+                "symbol": symbol,
+                "side": "SELL",
+                "quantity": self._format_qty(quantity),
+                "listClientOrderId": list_client_order_id,
+                "aboveType": "LIMIT_MAKER",
+                "aboveClientOrderId": take_profit_client_order_id,
+                "abovePrice": self._format_price(take_profit_price),
+                "belowType": "STOP_LOSS",
+                "belowClientOrderId": stop_client_order_id,
+                "belowStopPrice": self._format_price(stop_price),
+                "newOrderRespType": "FULL",
+            },
+            signed=True,
+        )
+
+    async def get_order_list(
+        self,
+        symbol: str,
+        *,
+        list_client_order_id: str,
+    ) -> dict:
+        return await self._request(
+            "GET",
+            "/api/v3/orderList",
+            {
+                "symbol": symbol,
+                "origClientOrderId": list_client_order_id,
+            },
+            signed=True,
+        )
+
+    async def cancel_order_list(
+        self,
+        symbol: str,
+        *,
+        list_client_order_id: str,
+    ) -> dict:
+        return await self._request(
+            "DELETE",
+            "/api/v3/orderList",
+            {
+                "symbol": symbol,
+                "listClientOrderId": list_client_order_id,
+            },
+            signed=True,
+        )
+
     async def my_trades(self, symbol: str, *, order_id: int | str) -> list[dict]:
         """Fetch account fills for one order so restart recovery can verify commissions."""
         data = await self._request(
@@ -331,6 +407,10 @@ class BinanceClient:
     @staticmethod
     def _format_qty(quantity: float) -> str:
         return format(Decimal(str(quantity)).normalize(), "f")
+
+    @staticmethod
+    def _format_price(price: float) -> str:
+        return format(Decimal(str(price)).normalize(), "f")
 
     @staticmethod
     def executed_quantity(order: dict) -> float:
