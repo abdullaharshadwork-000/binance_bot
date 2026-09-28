@@ -6,6 +6,7 @@ from app.config import Settings
 from app.exchange.binance import BinanceClient
 from app.execution.broker import Broker
 from app.models import RiskDecision, SignalSide, StrategySignal
+from app.runtime_lock import RuntimeFileLock
 from app.storage.db import TradingDB
 
 
@@ -281,3 +282,76 @@ def test_bad_entry_liquidity_is_rejected():
             with pytest.raises(ValueError):
                 await client.check_entry_liquidity("BTCUSDT", 1, 100)
     asyncio.run(scenario())
+
+
+def test_database_enforces_only_one_open_trade_per_mode_symbol(tmp_path):
+    import sqlite3
+    import pytest
+
+    db = TradingDB(str(tmp_path / "unique.db"))
+    db.init()
+    db.open_trade(
+        mode="paper",
+        symbol="BTCUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="first",
+        stop_price=95,
+        take_profit_price=110,
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        db.open_trade(
+            mode="paper",
+            symbol="BTCUSDT",
+            quantity=1,
+            entry_price=100,
+            entry_fee=0,
+            reason="duplicate",
+            stop_price=95,
+            take_profit_price=110,
+        )
+
+
+def test_order_update_requires_existing_order_row(tmp_path):
+    import pytest
+
+    db = TradingDB(str(tmp_path / "order-update.db"))
+    db.init()
+    with pytest.raises(ValueError, match="not updated exactly once"):
+        db.update_order_record(
+            client_order_id="missing",
+            binance_order_id=None,
+            executed_quantity=0,
+            average_fill_price=None,
+            status="UNKNOWN",
+            commission_quote=0,
+            commission_details=[],
+        )
+
+
+def test_runtime_lock_prevents_second_process_owner_for_same_database(tmp_path):
+    import pytest
+
+    database = str(tmp_path / "shared.db")
+    first = RuntimeFileLock(database)
+    second = RuntimeFileLock(database)
+    first.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="Another trading-bot process"):
+            second.acquire()
+    finally:
+        first.release()
+
+
+def test_live_order_execution_is_blocked_until_exchange_protection_exists():
+    import pytest
+
+    with pytest.raises(ValueError, match="exchange-resident"):
+        Settings(
+            _env_file=None,
+            mode="live",
+            allow_live_trading=True,
+            binance_api_key="test",
+            binance_api_secret="test",
+        )
