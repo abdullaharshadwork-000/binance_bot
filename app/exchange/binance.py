@@ -256,6 +256,20 @@ class BinanceClient:
                 return float(balance.get("free") or 0.0)
         return 0.0
 
+    async def asset_balance_details(self, asset: str) -> dict[str, float]:
+        """Return free, locked and total balance for position reconciliation."""
+        account = await self.account()
+        for balance in account.get("balances", []):
+            if balance.get("asset") == asset:
+                free = Decimal(str(balance.get("free") or "0"))
+                locked = Decimal(str(balance.get("locked") or "0"))
+                return {
+                    "free": float(free),
+                    "locked": float(locked),
+                    "total": float(free + locked),
+                }
+        return {"free": 0.0, "locked": 0.0, "total": 0.0}
+
     async def asset_balances(self, assets: set[str]) -> dict[str, float]:
         """Return total balances (free + locked) so equity includes exchange-held funds."""
         account = await self.account()
