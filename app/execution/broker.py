@@ -516,11 +516,26 @@ class Broker:
                 for item in trades
                 if str(item.get("orderId")) == str(order.get("orderId"))
             ]
+            fill_qty = sum(float(item["qty"]) for item in fills)
+            if (
+                not fills
+                or not math.isclose(
+                    fill_qty,
+                    executed_qty,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            ):
+                raise RuntimeError(
+                    "Protective order executed but complete Binance fills are "
+                    "not yet available; local position remains blocked for reconciliation"
+                )
+
             verified = dict(order)
             verified["fills"] = fills
             fill_price = self.exchange.weighted_fill_price(
                 verified,
-                float(order.get("price") or 0) or float(trade["stop_price"]),
+                0.0,
             )
             if not math.isfinite(fill_price) or fill_price <= 0:
                 raise RuntimeError("Protective fill price could not be verified")
