@@ -120,18 +120,27 @@ def test_database_failure_rolls_back_order_application_with_position(tmp_path):
     asyncio.run(scenario())
 
 
-def test_exit_database_failure_blocks_duplicate_sell(tmp_path):
+def test_exit_database_failure_never_submits_untracked_sell(tmp_path):
     async def scenario():
         broker = make_broker(tmp_path)
         await buy(broker)
         with broker.db.connection() as conn:
-            conn.execute("CREATE TRIGGER fail_exit BEFORE UPDATE ON trades BEGIN SELECT RAISE(ABORT, 'disk failure'); END")
+            conn.execute(
+                "CREATE TRIGGER fail_exit BEFORE UPDATE ON trades "
+                "BEGIN SELECT RAISE(ABORT, 'disk failure'); END"
+            )
+
         with pytest.raises(Exception, match="disk failure"):
-            await broker.maybe_exit(StrategySignal(SignalSide.SELL, .8, "exit"), 100)
-        record = broker.db.unresolved_orders(mode="testnet", symbol="BTCUSDT")[0]
-        assert record["side"] == "SELL" and record["ledger_applied"] == 0
-        assert not (await broker.maybe_exit(StrategySignal(SignalSide.SELL, .8, "exit"), 100)).success
-        assert broker.exchange.market_order.await_count == 2
+            await broker.maybe_exit(
+                StrategySignal(SignalSide.SELL, .8, "exit"),
+                100,
+            )
+
+        # The only market order is the original BUY. If local protection state
+        # cannot be updated, fail closed instead of submitting an untracked SELL.
+        assert broker.exchange.market_order.await_count == 1
+        assert broker.db.get_open_trade("BTCUSDT", "testnet") is not None
+
     asyncio.run(scenario())
 
 
@@ -275,6 +284,7 @@ def test_position_drift_blocks_exit_instead_of_silently_closing_wrong_quantity(t
         assert "reconciliation required" in result.message.lower()
         assert broker.db.get_open_trade("BTCUSDT", "testnet") is not None
         assert broker.exchange.market_order.await_count == 1
+        broker.exchange.cancel_order_list.assert_not_awaited()
 
     asyncio.run(scenario())
 
