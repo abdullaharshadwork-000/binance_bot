@@ -47,6 +47,9 @@ class TradingDB:
                     stop_price REAL,
                     take_profit_price REAL,
                     highest_price REAL,
+                    protective_order_list_id TEXT,
+                    protective_list_client_order_id TEXT,
+                    protection_status TEXT,
                     opened_at TEXT NOT NULL,
                     closed_at TEXT
                 );
@@ -91,6 +94,12 @@ class TradingDB:
             }
             if "highest_price" not in columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN highest_price REAL")
+            if "protective_order_list_id" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN protective_order_list_id TEXT")
+            if "protective_list_client_order_id" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN protective_list_client_order_id TEXT")
+            if "protection_status" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN protection_status TEXT")
             order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
             if "ledger_applied" not in order_columns:
                 # Preserve historical records; every new intent explicitly starts at 0.
@@ -151,6 +160,48 @@ class TradingDB:
                  take_profit_price, entry_price, now),
             )
             return int(cur.lastrowid)
+
+    def set_trade_protection(
+        self,
+        trade_id: int,
+        *,
+        order_list_id: str | int | None,
+        list_client_order_id: str | None,
+        status: str,
+    ) -> None:
+        with self.connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE trades
+                SET protective_order_list_id=?,
+                    protective_list_client_order_id=?,
+                    protection_status=?
+                WHERE id=? AND status='OPEN'
+                """,
+                (
+                    str(order_list_id) if order_list_id is not None else None,
+                    list_client_order_id,
+                    status,
+                    trade_id,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("Open trade not found while updating protection")
+
+    def clear_trade_protection(self, trade_id: int, *, status: str | None = None) -> None:
+        with self.connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE trades
+                SET protective_order_list_id=NULL,
+                    protective_list_client_order_id=NULL,
+                    protection_status=?
+                WHERE id=? AND status='OPEN'
+                """,
+                (status, trade_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("Open trade not found while clearing protection")
 
     def raise_position_stop(
         self,
