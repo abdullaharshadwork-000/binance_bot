@@ -54,6 +54,10 @@ class TradingDB:
                 CREATE INDEX IF NOT EXISTS idx_trades_mode_symbol_status
                 ON trades(mode, symbol, status);
 
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_trades_one_open_per_mode_symbol
+                ON trades(mode, symbol)
+                WHERE status='OPEN';
+
                 CREATE TABLE IF NOT EXISTS orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     mode TEXT NOT NULL,
@@ -510,7 +514,7 @@ class TradingDB:
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE orders
                 SET binance_order_id=?, executed_quantity=?, average_fill_price=?,
@@ -528,6 +532,10 @@ class TradingDB:
                     client_order_id,
                 ),
             )
+            if cur.rowcount != 1:
+                raise ValueError(
+                    f"Order record {client_order_id} was not updated exactly once"
+                )
 
     def get_order_by_client_id(self, client_order_id: str) -> dict | None:
         with self.connection() as conn:
