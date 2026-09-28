@@ -560,11 +560,24 @@ class Broker:
                 self.settings.symbol,
                 list_client_order_id=str(list_client_id),
             )
-        except Exception:
+        except Exception as cancel_error:
             fill = await self._protective_fill(trade)
             if fill is not None:
                 return fill
-            raise
+            status = str(
+                self.db.get_open_trade(
+                    self.settings.symbol,
+                    self.settings.mode,
+                ).get("protection_status")
+                or ""
+            )
+            if status not in {"ALL_DONE", "REJECT", "EXPIRED"}:
+                raise cancel_error
+            self.db.clear_trade_protection(
+                int(trade["id"]),
+                status="CANCELED_FOR_SOFTWARE_EXIT",
+            )
+            return None
 
         # A leg can fill at the same moment cancellation reaches the exchange.
         # Reconcile the list before submitting any replacement market SELL.
@@ -660,9 +673,17 @@ class Broker:
         fill_price = self.exchange.weighted_fill_price(order, price)
         fee = await self.exchange.order_fee_quote(order, fill_price)
         base_commission = self._base_commission(order, self.settings.base_asset)
-        held_qty = max(0.0, executed_qty - base_commission)
+        raw_held_qty = max(0.0, executed_qty - base_commission)
+        held_qty = await self.exchange.normalize_quantity(
+            self.settings.symbol,
+            raw_held_qty,
+            fill_price,
+        )
         if held_qty <= 0:
-            return ExecutionResult("BUY", False, "Executed buy left no usable base-asset quantity")
+            raise RuntimeError(
+                "Executed buy left no exchange-tradable base quantity; "
+                "manual reconciliation is required"
+            )
 
         stop_price, take_profit_price = await self._risk_prices_from_fill(fill_price)
         trade_id = self.db.open_trade(
