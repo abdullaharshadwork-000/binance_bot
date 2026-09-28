@@ -1,6 +1,7 @@
 import uuid
 import math
 import json
+import time
 from decimal import Decimal
 
 from app.config import Settings
@@ -14,6 +15,8 @@ class Broker:
         self.settings = settings
         self.exchange = exchange
         self.db = db
+        self._inventory_checked_at = 0.0
+        self._inventory_issue: str | None = None
         self._init_paper_balances()
 
     @property
@@ -164,19 +167,17 @@ class Broker:
         return order, client_order_id
 
     async def reconcile_unresolved_orders(self) -> list[dict]:
-        """Re-check uncertain exchange orders without ever blindly resubmitting them."""
+        """Re-check uncertain exchange orders and apply only fully verified terminal fills."""
         if self.settings.mode == "paper":
             return []
 
+        terminal = {"FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH"}
         results = []
         for record in self.db.unresolved_orders(
             mode=self.settings.mode,
             symbol=self.settings.symbol,
         ):
             client_order_id = str(record["client_order_id"])
-            if record["status"] == "RECOVERY_REQUIRED":
-                results.append({"client_order_id": client_order_id, "status": "RECOVERY_REQUIRED", "resolved": False})
-                continue
             try:
                 order = await self.exchange.get_order(
                     self.settings.symbol,
@@ -193,42 +194,198 @@ class Broker:
 
             executed_qty = self.exchange.executed_quantity(order)
             raw_status = str(order.get("status") or "UNKNOWN")
-            if (order.get("symbol") != self.settings.symbol
-                    or order.get("side") != record["side"]
-                    or order.get("clientOrderId") != client_order_id
-                    or not math.isfinite(executed_qty) or executed_qty < float(record["executed_quantity"])):
-                results.append({"client_order_id": client_order_id, "resolved": False,
-                                "error": "Invalid or mismatched reconciliation response"})
+            if (
+                order.get("symbol") != self.settings.symbol
+                or order.get("side") != record["side"]
+                or order.get("clientOrderId") != client_order_id
+                or not math.isfinite(executed_qty)
+                or executed_qty < float(record["executed_quantity"])
+            ):
+                results.append({
+                    "client_order_id": client_order_id,
+                    "resolved": False,
+                    "error": "Invalid or mismatched reconciliation response",
+                })
                 continue
-            fill_price = (
-                self.exchange.weighted_fill_price(order, 0.0)
-                if executed_qty > 0 else None
-            )
 
-            if executed_qty > 0:
-                # We intentionally do not invent/reconstruct a position from incomplete
-                # order history. Block further trading until a human reviews it.
+            if executed_qty <= 0:
+                self.db.update_order_record(
+                    client_order_id=client_order_id,
+                    binance_order_id=(
+                        str(order.get("orderId"))
+                        if order.get("orderId") is not None else None
+                    ),
+                    executed_quantity=0.0,
+                    average_fill_price=None,
+                    status=raw_status,
+                    commission_quote=0.0,
+                    commission_details=[],
+                )
+                results.append({
+                    "client_order_id": client_order_id,
+                    "status": raw_status,
+                    "resolved": raw_status in terminal | {"REJECTED"},
+                    "executed_quantity": 0.0,
+                })
+                continue
+
+            if raw_status not in terminal or order.get("orderId") is None:
                 stored_status = "RECOVERY_REQUIRED"
-            else:
-                stored_status = raw_status
+                self.db.update_order_record(
+                    client_order_id=client_order_id,
+                    binance_order_id=(
+                        str(order.get("orderId"))
+                        if order.get("orderId") is not None else None
+                    ),
+                    executed_quantity=executed_qty,
+                    average_fill_price=None,
+                    status=stored_status,
+                    commission_quote=float(record.get("commission_quote") or 0.0),
+                    commission_details=json.loads(record.get("commission_details") or "[]"),
+                )
+                results.append({
+                    "client_order_id": client_order_id,
+                    "status": stored_status,
+                    "resolved": False,
+                    "executed_quantity": executed_qty,
+                    "error": "Order is not terminal or does not have a Binance order id",
+                })
+                continue
 
+            try:
+                trades = await self.exchange.my_trades(
+                    self.settings.symbol,
+                    order_id=order["orderId"],
+                )
+            except Exception as exc:
+                trades = []
+                fill_lookup_error = str(exc)
+            else:
+                fill_lookup_error = None
+
+            fills = [
+                {
+                    "price": str(item.get("price") or "0"),
+                    "qty": str(item.get("qty") or "0"),
+                    "commission": str(item.get("commission") or "0"),
+                    "commissionAsset": str(item.get("commissionAsset") or ""),
+                }
+                for item in trades
+                if str(item.get("orderId")) == str(order.get("orderId"))
+            ]
+            fill_qty = sum(float(item["qty"]) for item in fills)
+            complete_fills = (
+                bool(fills)
+                and all(item["commissionAsset"] for item in fills)
+                and math.isclose(fill_qty, executed_qty, rel_tol=1e-9, abs_tol=1e-12)
+            )
+            if not complete_fills:
+                self.db.update_order_record(
+                    client_order_id=client_order_id,
+                    binance_order_id=str(order.get("orderId")),
+                    executed_quantity=executed_qty,
+                    average_fill_price=None,
+                    status="RECOVERY_REQUIRED",
+                    commission_quote=float(record.get("commission_quote") or 0.0),
+                    commission_details=json.loads(record.get("commission_details") or "[]"),
+                )
+                results.append({
+                    "client_order_id": client_order_id,
+                    "status": "RECOVERY_REQUIRED",
+                    "resolved": False,
+                    "executed_quantity": executed_qty,
+                    "error": (
+                        "Complete Binance fills were unavailable"
+                        + (f": {fill_lookup_error}" if fill_lookup_error else "")
+                    ),
+                })
+                continue
+
+            verified_order = dict(order)
+            verified_order["fills"] = fills
+            fill_price = self.exchange.weighted_fill_price(verified_order, 0.0)
+            if not math.isfinite(fill_price) or fill_price <= 0:
+                results.append({
+                    "client_order_id": client_order_id,
+                    "status": "RECOVERY_REQUIRED",
+                    "resolved": False,
+                    "executed_quantity": executed_qty,
+                    "error": "Verified fills did not produce a valid average fill price",
+                })
+                continue
+
+            fee_quote = await self.exchange.order_fee_quote(verified_order, fill_price)
+            commission_details = self.exchange.commission_details(verified_order)
             self.db.update_order_record(
                 client_order_id=client_order_id,
-                binance_order_id=(
-                    str(order.get("orderId"))
-                    if order.get("orderId") is not None else None
-                ),
+                binance_order_id=str(order.get("orderId")),
                 executed_quantity=executed_qty,
                 average_fill_price=fill_price,
-                status=stored_status,
-                commission_quote=float(record.get("commission_quote") or 0.0),
-                commission_details=json.loads(record.get("commission_details") or "[]"),
+                status=raw_status,
+                commission_quote=fee_quote,
+                commission_details=commission_details,
             )
+
+            try:
+                if record["side"] == "BUY":
+                    if self.db.get_open_trade(self.settings.symbol, self.settings.mode):
+                        raise RuntimeError(
+                            "An open position already exists; recovered BUY cannot be applied safely"
+                        )
+                    base_commission = self._base_commission(
+                        verified_order,
+                        self.settings.base_asset,
+                    )
+                    held_qty = max(0.0, executed_qty - base_commission)
+                    if held_qty <= 0:
+                        raise RuntimeError("Recovered BUY left no usable base quantity")
+                    stop_price, take_profit_price = await self._risk_prices_from_fill(
+                        fill_price
+                    )
+                    self.db.open_trade(
+                        mode=self.settings.mode,
+                        symbol=self.settings.symbol,
+                        quantity=held_qty,
+                        entry_price=fill_price,
+                        entry_fee=fee_quote,
+                        reason="Recovered Binance BUY after restart",
+                        stop_price=stop_price,
+                        take_profit_price=take_profit_price,
+                        client_order_id=client_order_id,
+                    )
+                else:
+                    trade = self.db.get_open_trade(
+                        self.settings.symbol,
+                        self.settings.mode,
+                    )
+                    if trade is None:
+                        raise RuntimeError(
+                            "No local open position exists for recovered SELL"
+                        )
+                    self.db.close_trade(
+                        int(trade["id"]),
+                        fill_price,
+                        fee_quote,
+                        "Recovered Binance SELL after restart",
+                        executed_quantity=executed_qty,
+                        client_order_id=client_order_id,
+                    )
+            except Exception as exc:
+                results.append({
+                    "client_order_id": client_order_id,
+                    "status": "RECOVERY_REQUIRED",
+                    "resolved": False,
+                    "executed_quantity": executed_qty,
+                    "error": str(exc),
+                })
+                continue
+
             results.append({
                 "client_order_id": client_order_id,
-                "status": stored_status,
-                "resolved": stored_status in {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"},
+                "status": raw_status,
+                "resolved": True,
                 "executed_quantity": executed_qty,
+                "average_fill_price": fill_price,
             })
         return results
 
@@ -356,6 +513,38 @@ class Broker:
             },
         )
 
+    async def _position_inventory_issue(self, trade: dict) -> str | None:
+        """Detect exchange/local position drift without silently rewriting accounting."""
+        if self.settings.mode == "paper":
+            return None
+        now = time.monotonic()
+        if now - self._inventory_checked_at < self.settings.account_refresh_seconds:
+            return self._inventory_issue
+
+        details = await self.exchange.asset_balance_details(self.settings.base_asset)
+        self._inventory_checked_at = now
+        recorded = float(trade["quantity"])
+        tolerance = max(1e-12, recorded * 1e-8)
+        total = float(details["total"])
+        free = float(details["free"])
+        locked = float(details["locked"])
+
+        if total + tolerance < recorded:
+            self._inventory_issue = (
+                f"Position reconciliation required: local quantity {recorded:.12g} "
+                f"{self.settings.base_asset} exceeds exchange total {total:.12g}. "
+                "Trading is blocked for this position until account/order history is reconciled."
+            )
+        elif free + tolerance < recorded:
+            self._inventory_issue = (
+                f"Position reconciliation required: {locked:.12g} "
+                f"{self.settings.base_asset} is locked outside the bot's local position state. "
+                "Trading is blocked until the lock/order is reconciled."
+            )
+        else:
+            self._inventory_issue = None
+        return self._inventory_issue
+
     async def maybe_exit(self, signal: StrategySignal, price: float) -> ExecutionResult:
         if not math.isfinite(price) or price <= 0:
             return ExecutionResult("HOLD", False, "Invalid exit price; awaiting valid market data")
@@ -453,6 +642,10 @@ class Broker:
 
         if self.settings.mode == "live" and not self.settings.allow_live_trading:
             return ExecutionResult("SELL", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
+
+        inventory_issue = await self._position_inventory_issue(trade)
+        if inventory_issue is not None:
+            return ExecutionResult("SELL", False, inventory_issue)
 
         available = await self.exchange.asset_balance(self.settings.base_asset)
         requested_qty = min(qty, available)

@@ -1,8 +1,9 @@
 # Live trading readiness
 
-Status: execution safeguards strengthened; not certified for unattended live use.
-No winning-trade guarantee is possible. The existing strategy score is a heuristic,
-not a measured probability of profit. This update does not enable live trading.
+Status: execution safeguards strengthened; live order execution is intentionally
+blocked until exchange-resident protective orders and restart-safe protection
+reconciliation are implemented. No winning-trade guarantee is possible. The
+existing strategy score is a heuristic, not a measured probability of profit.
 
 ## Implemented and tested
 
@@ -31,10 +32,11 @@ exchange responses and temporary databases; they do not place exchange orders.
 
 ## Remaining blockers and limitations
 
-1. Stops and take-profit exits are local software checks. They cannot protect a
-   position while the machine, network or process is down. Exchange-held protective
-   orders, their lifecycle and restart reconciliation still need implementation
-   and Testnet failure testing before unattended live use.
+1. Stops and take-profit exits are still local software checks. Because they cannot
+   protect a position while the machine, network or process is down, configuration
+   validation now refuses ALLOW_LIVE_TRADING=true. Testnet remains available for
+   execution testing until exchange-held protective orders, lifecycle management,
+   and restart reconciliation are implemented.
 2. No substantial out-of-sample or forward-trading evidence demonstrates an edge
    after fees, spread and slippage. Three historical losing trades are insufficient
    to select or validate parameters. Test filters on unseen data and different
@@ -63,3 +65,21 @@ Passing unit tests alone is not a reason to enable ALLOW_LIVE_TRADING.
 API behavior references:
 - https://developers.binance.com/en/docs/products/spot/rest-api
 - https://developers.binance.com/en/docs/products/spot/filters
+
+
+## Additional hardening
+
+- A cross-platform runtime file lock prevents two application processes from
+  controlling the same database at once.
+- SQLite enforces at most one OPEN trade per mode/symbol.
+- Terminal Binance orders with complete account fills can be recovered and
+  applied after a restart; incomplete or inconsistent recovery data remains
+  blocked.
+- Exchange/local position quantity drift is detected and blocks trading instead
+  of silently closing a different quantity.
+- Read-only analysis uses the same portfolio equity/capacity/exposure gates as
+  live execution logic.
+- Failed entries use a retry backoff instead of retrying every fast cycle.
+- The optional LLM advisor can only reduce confidence; it cannot promote an
+  otherwise non-qualifying trade.
+- Trading-control HTTP endpoints are restricted to localhost clients.

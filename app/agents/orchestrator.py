@@ -64,6 +64,7 @@ class TradingOrchestrator:
         self._control_lock = asyncio.Lock()
         self._manual_cycle_active = False
         self._exchange_validated = False
+        self._entry_retry_after_monotonic = 0.0
 
         self.latest_price: float | None = None
         self.latest_price_event_ms: int | None = None
@@ -416,6 +417,16 @@ class TradingOrchestrator:
             if candidate is not None:
                 price, price_source, price_age_ms = await self._market_price()
             quality_reason = self._entry_quality_reason(candidate, price) if candidate is not None else None
+            if (
+                candidate is not None
+                and candidate_signal.side == SignalSide.BUY
+                and time.monotonic() < self._entry_retry_after_monotonic
+            ):
+                remaining = max(
+                    1,
+                    math.ceil(self._entry_retry_after_monotonic - time.monotonic()),
+                )
+                quality_reason = f"Entry retry backoff is active; retry in {remaining}s"
             candle_close_time = (
                 int(candidate["candle_close_time"])
                 if candidate is not None
@@ -493,12 +504,16 @@ class TradingOrchestrator:
                     raise
 
                 if execution.success and execution.action == "BUY":
+                    self._entry_retry_after_monotonic = 0.0
                     if candle_close_time is not None:
                         self.db.set_state(
                             self._entry_state_key,
                             candle_close_time,
                         )
                 elif not execution.success:
+                    self._entry_retry_after_monotonic = (
+                        time.monotonic() + self.settings.entry_retry_seconds
+                    )
                     downstream_ok = False
                     risk_decision = RiskDecision(False, execution.message)
 
@@ -586,7 +601,10 @@ class TradingOrchestrator:
                 self.settings.symbol,
                 self.settings.mode,
             )
-            equity = await self.broker.equity(price)
+            if self.portfolio_guard is not None:
+                equity = await self.portfolio_guard.poll_equity()
+            else:
+                equity = await self.broker.equity(price)
             daily_pnl = (
                 self.portfolio_guard.realized_pnl_today()
                 if self.portfolio_guard is not None
@@ -598,17 +616,82 @@ class TradingOrchestrator:
 
             risk_decision: RiskDecision | None = None
             if open_trade is None:
-                risk_decision = self.risk.evaluate_entry(
-                    signal=signal,
-                    price=price,
-                    equity=equity,
-                    daily_realized_pnl=daily_pnl,
-                    threshold=max(
-                        self.settings.min_signal_confidence,
-                        profile.confidence_threshold,
-                    ),
-                    risk_multiplier=profile.risk_multiplier,
-                )
+                portfolio_reason = None
+                if self.portfolio_guard is not None:
+                    portfolio_reason = (
+                        self.portfolio_guard.loss_pause_reason()
+                        or self.portfolio_guard.entry_capacity_reason()
+                    )
+                    if portfolio_reason is None:
+                        for configured_symbol in self.portfolio_guard.symbols:
+                            if self.db.has_unresolved_order(
+                                mode=self.settings.mode,
+                                symbol=configured_symbol,
+                            ):
+                                portfolio_reason = (
+                                    f"Unresolved order on {configured_symbol}; "
+                                    "portfolio entries are blocked"
+                                )
+                                break
+                    snapshot = self.portfolio_guard.snapshot()
+                    if portfolio_reason is None and equity is None:
+                        portfolio_reason = (
+                            snapshot.get("error")
+                            or "Portfolio valuation is unavailable or stale"
+                        )
+
+                if portfolio_reason is not None:
+                    risk_decision = RiskDecision(False, portfolio_reason)
+                elif equity is None:
+                    risk_decision = RiskDecision(
+                        False,
+                        "Account equity is unavailable or stale",
+                    )
+                else:
+                    risk_decision = self.risk.evaluate_entry(
+                        signal=signal,
+                        price=price,
+                        equity=equity,
+                        daily_realized_pnl=daily_pnl,
+                        threshold=max(
+                            self.settings.min_signal_confidence,
+                            profile.confidence_threshold,
+                        ),
+                        risk_multiplier=profile.risk_multiplier,
+                    )
+                    if (
+                        risk_decision.allowed
+                        and self.portfolio_guard is not None
+                    ):
+                        snapshot = self.portfolio_guard.snapshot()
+                        notional = risk_decision.quantity * price
+                        slippage_bps = (
+                            self.settings.paper_slippage_bps
+                            if self.settings.mode == "paper"
+                            else self.settings.max_entry_slippage_bps
+                        )
+                        costs = (
+                            (1 + self.settings.trading_fee_bps / 10000)
+                            * (1 + slippage_bps / 10000)
+                        )
+                        if notional * costs > float(
+                            snapshot.get("available_quote") or 0.0
+                        ):
+                            risk_decision = RiskDecision(
+                                False,
+                                "Insufficient shared quote balance including costs",
+                            )
+                        elif (
+                            snapshot.get("exposure") is not None
+                            and snapshot.get("equity") is not None
+                            and snapshot["exposure"] + notional * costs
+                            > snapshot["equity"]
+                            * self.settings.max_portfolio_exposure_fraction
+                        ):
+                            risk_decision = RiskDecision(
+                                False,
+                                "Portfolio exposure limit would be exceeded",
+                            )
 
             result = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),

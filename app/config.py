@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     max_entry_deviation_pct: float = Field(default=0.015, gt=0, le=0.10)
     max_portfolio_exposure_fraction: float = Field(default=0.15, gt=0, le=1.0)
     entry_cooldown_seconds: float = Field(default=60.0, ge=0, le=86400)
+    entry_retry_seconds: float = Field(default=30.0, ge=1.0, le=900.0)
 
     binance_api_key: str = ""
     binance_api_secret: str = ""
@@ -119,6 +120,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Multi-symbol live trading is blocked. Keep ALLOW_MULTI_SYMBOL_LIVE=false "
                 "until the multi-symbol engine has been validated in Testnet."
+            )
+
+        if self.mode == "live" and self.allow_live_trading:
+            raise ValueError(
+                "Live order execution is intentionally blocked until exchange-resident "
+                "protective orders and restart-safe protection reconciliation are implemented. "
+                "Use MODE=testnet for execution testing."
             )
 
         if self.mode in {"testnet", "live"} and not (

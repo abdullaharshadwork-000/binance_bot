@@ -1,8 +1,8 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.agents.multi_orchestrator import MultiSymbolTradingManager
 from app.config import SUPPORTED_INTERVALS, get_settings
@@ -26,6 +26,24 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Agentic Binance Bot", version="0.7.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def local_control_only(request: Request, call_next):
+    """Fail closed if trading-control endpoints are reached from a remote client."""
+    if request.url.path.startswith("/bot/"):
+        client_host = request.client.host if request.client else None
+        if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "Trading-control endpoints are localhost-only. "
+                        "Do not expose the dashboard as a public control API."
+                    )
+                },
+            )
+    return await call_next(request)
 
 
 def _selected_bot(symbol: str | None = None):

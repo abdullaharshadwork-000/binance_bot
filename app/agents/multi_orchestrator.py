@@ -8,6 +8,7 @@ from typing import Awaitable, Callable
 from app.agents.orchestrator import TradingOrchestrator
 from app.config import Settings
 from app.models import ExecutionResult
+from app.runtime_lock import RuntimeFileLock
 from app.storage.db import TradingDB
 
 
@@ -264,6 +265,7 @@ class MultiSymbolTradingManager:
         self.bots: dict[str, TradingOrchestrator] = {}
         self._control_lock = asyncio.Lock()
         self._dashboard_price_lock = asyncio.Lock()
+        self._runtime_lock = RuntimeFileLock(settings.database_path)
 
         symbols = settings.trading_symbols
         profile_path = Path(settings.learning_profile_path)
@@ -355,6 +357,7 @@ class MultiSymbolTradingManager:
     async def _start_unlocked(self) -> dict[str, bool]:
         started: dict[str, bool] = {}
         started_bots: list[TradingOrchestrator] = []
+        self._runtime_lock.acquire()
         try:
             for symbol, bot in self.bots.items():
                 did_start = await bot.start()
@@ -368,6 +371,7 @@ class MultiSymbolTradingManager:
                     await bot.stop()
                 except Exception:
                     pass
+            self._runtime_lock.release()
             raise
 
     async def stop(self) -> dict[str, bool]:
@@ -384,6 +388,7 @@ class MultiSymbolTradingManager:
         for symbol, result in zip(symbols, results):
             output[symbol] = False if isinstance(result, Exception) else bool(result)
         await self.portfolio.close()
+        self._runtime_lock.release()
         return output
 
     async def analyze_all(self) -> dict[str, dict]:

@@ -23,7 +23,7 @@ class LLMAdvisor:
                 "constraints": [
                     "Do not place orders.",
                     "Do not change risk limits.",
-                    "adjustment must be between -0.10 and 0.10.",
+                    "adjustment must be between -0.10 and 0.00.",
                 ],
                 "signal": signal.side.value,
                 "base_confidence": signal.confidence,
@@ -41,7 +41,9 @@ class LLMAdvisor:
                 if text.startswith("json"):
                     text = text[4:].strip()
             data = json.loads(text)
-            adjustment = max(-0.10, min(0.10, float(data.get("adjustment", 0))))
+            # The LLM may veto or reduce confidence, but it must never turn a
+            # deterministic non-qualifying setup into an entry.
+            adjustment = max(-0.10, min(0.0, float(data.get("adjustment", 0))))
             return adjustment, str(data.get("reason", "LLM review"))[:300]
         except Exception as exc:
             return 0.0, f"LLM advisor unavailable: {exc}"
