@@ -200,3 +200,25 @@ or incomplete response prevents that transaction, new orders for that symbol sta
 blocked. `RECOVERY_REQUIRED` cannot be cleared merely by restarting. Compare the
 exchange order, fills, commissions and local position before any manual repair;
 do not delete the intent or reset the database to bypass a block.
+
+
+### When the bot is not entering trades
+
+The portfolio banner reports an exposure block even while every strategy says
+HOLD. Existing account coin holdings count toward exposure, including holdings
+that were not opened by the bot. Zero bot positions does not override that limit.
+The entry panel now explains the latest non-BUY setup instead of always showing
+only a wait-for-next-candle message.
+
+To forward-test without existing Testnet holdings, stop the existing server and run:
+
+```powershell
+python run.py --paper
+```
+
+This uses public Spot prices, simulated fills and the separate persistent database
+`data/paper_validation.db`. It leaves `.env` and Testnet balances unchanged, disables
+exchange orders, LLM calls and adaptive learning for this launch, and preserves
+configured markets and risk limits. Open the dashboard and start the simulation.
+A valid BUY setup is still required; paper mode does not force trades. Running
+`python run.py` again uses the normal configuration.

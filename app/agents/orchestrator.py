@@ -436,7 +436,9 @@ class TradingOrchestrator:
             elif candidate is None:
                 risk_decision = RiskDecision(
                     False,
-                    "Waiting for the next completed candle before a new entry",
+                    (f"No BUY setup: {candidate_signal.reason}"
+                     if candidate_signal.side != SignalSide.BUY
+                     else "Waiting for the next completed candle before a new entry"),
                 )
             elif quality_reason is not None:
                 risk_decision = RiskDecision(False, quality_reason)

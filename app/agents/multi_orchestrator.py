@@ -134,11 +134,21 @@ class PortfolioCoordinator:
                     error = "Portfolio equity is invalid"
         # Partial valuations must not look like complete, current account totals.
         valuation_valid = equity is not None
+        exposure_headroom = max(0.0, equity * self.settings.max_portfolio_exposure_fraction - exposure) if valuation_valid else None
+        entry_block_reason = error if not valuation_valid else None
+        if valuation_valid and exposure_headroom <= 0:
+            entry_block_reason = (
+                f"New entries blocked: account coin exposure {exposure / equity:.1%} "
+                f"is at or above the {self.settings.max_portfolio_exposure_fraction:.1%} limit. "
+                "Holdings outside bot positions count toward this limit."
+            )
         return {"equity": equity, "available_quote": cash,
                 "exposure": exposure if valuation_valid else None,
                 "managed_exposure": managed_exposure if valuation_valid else None,
                 "unmanaged_exposure": unmanaged_exposure if valuation_valid else None,
                 "holdings": holding_details if valuation_valid else [],
+                "exposure_headroom": exposure_headroom,
+                "entry_block_reason": entry_block_reason,
                 "exposure_scope": "Configured symbols, including holdings outside bot positions",
                 "exposure_fraction": exposure / equity if equity else None,
                 "max_exposure_fraction": self.settings.max_portfolio_exposure_fraction,

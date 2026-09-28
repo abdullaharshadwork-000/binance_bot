@@ -318,3 +318,33 @@ def test_loss_pause_uses_close_order_and_filters_mode_and_symbols(tmp_path):
     recent = m.portfolio.db.recent_portfolio_closes(mode="paper", symbols=["BTCUSDT"], limit=2)
     assert [trade["id"] for trade in recent] == [winner]
     assert m.portfolio.db.recent_portfolio_closes(mode="live", symbols=m.symbols, limit=2) == []
+
+
+def test_overexposure_is_visible_without_a_buy_attempt(tmp_path):
+    async def scenario():
+        m = manager(tmp_path)
+        position(m.primary_bot, quantity=10, entry=100)
+        await tick(m.primary_bot, 100)
+        snapshot = m.portfolio.snapshot()
+        assert snapshot["exposure_headroom"] == 0
+        assert "New entries blocked" in snapshot["entry_block_reason"]
+        assert "50.0%" in snapshot["entry_block_reason"]
+        m.primary_bot.latest_price_event_ms -= 60000
+        snapshot = m.portfolio.snapshot()
+        assert snapshot["exposure_headroom"] is None
+        assert "Fresh valuation" in snapshot["entry_block_reason"]
+    asyncio.run(scenario())
+
+
+def test_paper_launcher_isolates_state_and_disables_exchange_trading(monkeypatch):
+    import os
+    from run import configure_paper_mode
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    configure_paper_mode()
+    settings = Settings(_env_file=None)
+    assert settings.mode == "paper"
+    assert settings.database_path == "data/paper_validation.db"
+    assert not settings.allow_live_trading
+    assert not settings.allow_multi_symbol_live
+    assert not settings.enable_llm_advisor
+    assert not settings.enable_adaptive_learning
