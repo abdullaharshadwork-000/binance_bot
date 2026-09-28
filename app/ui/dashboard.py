@@ -75,7 +75,7 @@ DASHBOARD_HTML = r'''<!doctype html>
     <div class="market-head">
       <div>
         <h2 style="margin-bottom:0">Multi-Symbol Signal Monitor</h2>
-        <div class="market-title-note">All configured markets are evaluated independently. Portfolio limits still cap simultaneous open positions.</div>
+        <div class="market-title-note">All configured markets are evaluated independently. Scores apply to BUY/SELL signals; HOLD means no new order signal. Open positions remain monitored for exits.</div>
       </div>
       <div class="chart-status"><span id="portfolioStatus">Portfolio —</span></div>
     </div>
@@ -312,9 +312,11 @@ function renderSymbolOverview(items,portfolio){
     : `Configured-coin holdings: bot positions ${money(portfolio?.managed_exposure)}; outside bot positions ${money(portfolio?.unmanaged_exposure)}. Both count toward the account exposure limit. `+
       (holdings.length?holdings.map(h=>`${h.symbol}: ${num(h.quantity,8)} total, ${num(h.unmanaged_quantity,8)} outside bot positions`).join(' | '):'No holdings in configured coins.');
   const body=rows.map(item=>{
-    const risk=item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
+    const risk=item.open_position?badge('MANAGING','blue'):item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
+    const actionable=item.signal==='BUY'||item.signal==='SELL';
+    const score=actionable&&item.confidence!=null?num(Number(item.confidence)*100,1)+'/100':item.open_position?'Holding position':'No entry setup';
     const status=item.error?badge('ERROR','red'):item.running?badge('RUNNING','green'):badge('STOPPED','amber');
-    return `<tr><td><b>${esc(item.symbol)}</b></td><td>${sideBadge(item.signal)}</td><td>${item.signal==='BUY'||item.signal==='SELL'?num(Number(item.confidence)*100,1)+'/100':'?'}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price===null||item.price===undefined?'—':num(item.price,4)}</td><td>${status}</td></tr>`;
+    return `<tr><td><b>${esc(item.symbol)}</b></td><td>${sideBadge(item.signal)}</td><td>${score}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price===null||item.price===undefined?'—':num(item.price,4)}</td><td>${status}</td></tr>`;
   }).join('');
   $('symbolOverview').innerHTML=`<table><thead><tr><th>Market</th><th>Signal</th><th>Strategy score</th><th>Entry Gate</th><th>Position</th><th>Price</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`;
 }
