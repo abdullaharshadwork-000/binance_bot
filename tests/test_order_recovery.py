@@ -19,6 +19,10 @@ def make_broker(tmp_path):
     exchange.normalize_quantity = AsyncMock(side_effect=lambda s, q, p: q)
     exchange.normalize_price = AsyncMock(side_effect=lambda s, p: p)
     exchange.asset_balance = AsyncMock(return_value=1)
+    exchange.asset_balance_details = AsyncMock(
+        return_value={"free": 1.0, "locked": 0.0, "total": 1.0}
+    )
+    exchange.my_trades = AsyncMock(return_value=[])
     exchange.check_entry_liquidity = AsyncMock(return_value={})
     async def fill(symbol, side, quantity, *, client_order_id):
         return {"symbol": symbol, "side": side, "clientOrderId": client_order_id,
@@ -189,4 +193,64 @@ def test_liquidity_rejection_does_not_submit_or_create_order_intent(tmp_path):
         assert result.details["order_submitted"] is False
         broker.exchange.market_order.assert_not_awaited()
         assert not broker.db.has_unresolved_order(mode="testnet", symbol="BTCUSDT")
+    asyncio.run(scenario())
+
+
+def test_verified_terminal_buy_is_recovered_after_restart(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path)
+        broker._risk_prices_from_fill = AsyncMock(side_effect=RuntimeError("crash after fill"))
+        with pytest.raises(RuntimeError, match="crash after fill"):
+            await buy(broker)
+
+        record = broker.db.unresolved_orders(mode="testnet", symbol="BTCUSDT")[0]
+        restarted = make_broker(tmp_path)
+        restarted.exchange.get_order = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "clientOrderId": record["client_order_id"],
+            "orderId": 123,
+            "status": "FILLED",
+            "executedQty": "1",
+            "cummulativeQuoteQty": "100",
+        })
+        restarted.exchange.my_trades = AsyncMock(return_value=[{
+            "orderId": 123,
+            "price": "100",
+            "qty": "1",
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }])
+
+        result = await restarted.reconcile_unresolved_orders()
+
+        assert result[0]["resolved"] is True
+        trade = restarted.db.get_open_trade("BTCUSDT", "testnet")
+        assert trade is not None
+        assert trade["quantity"] == pytest.approx(1)
+        assert not restarted.db.has_unresolved_order(
+            mode="testnet", symbol="BTCUSDT"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_position_drift_blocks_exit_instead_of_silently_closing_wrong_quantity(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path)
+        await buy(broker)
+        broker.exchange.asset_balance_details = AsyncMock(
+            return_value={"free": 0.4, "locked": 0.0, "total": 0.4}
+        )
+
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.SELL, .8, "exit"),
+            100,
+        )
+
+        assert result.success is False
+        assert "reconciliation required" in result.message.lower()
+        assert broker.db.get_open_trade("BTCUSDT", "testnet") is not None
+        assert broker.exchange.market_order.await_count == 1
+
     asyncio.run(scenario())
