@@ -558,10 +558,6 @@ class Broker:
                 "An earlier Binance order has an unresolved outcome; duplicate exit submission is blocked",
             )
 
-        inventory_issue = await self._position_inventory_issue(trade)
-        if inventory_issue is not None:
-            return ExecutionResult("HOLD", False, inventory_issue)
-
         reason = None
         original_stop = float(trade["stop_price"])
         if price <= original_stop:
@@ -646,6 +642,10 @@ class Broker:
 
         if self.settings.mode == "live" and not self.settings.allow_live_trading:
             return ExecutionResult("SELL", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
+
+        inventory_issue = await self._position_inventory_issue(trade)
+        if inventory_issue is not None:
+            return ExecutionResult("SELL", False, inventory_issue)
 
         available = await self.exchange.asset_balance(self.settings.base_asset)
         requested_qty = min(qty, available)
