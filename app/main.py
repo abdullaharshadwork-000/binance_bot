@@ -57,9 +57,10 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
     selected_bot = _selected_bot(symbol)
     selected_settings = selected_bot.settings
 
+    price_errors = await manager.refresh_stopped_market_prices()
     market_monitor = selected_bot.market_snapshot()
     price = market_monitor.get("price")
-    market_error = None
+    market_error = price_errors.get(selected_settings.symbol)
 
     stale_limit_ms = selected_settings.market_data_stale_seconds * 1000
     needs_rest_price = (
@@ -68,9 +69,9 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
         or float(market_monitor.get("price_age_ms") or 0) > stale_limit_ms
     )
 
-    # When stopped, keep the selected dashboard price fresh without querying
-    # every configured symbol on each 1-second dashboard refresh.
-    if needs_rest_price:
+    # Stopped markets are valued together above. Running markets own their feed;
+    # retain the existing fallback for the selected market if its feed is stale.
+    if needs_rest_price and selected_bot.running:
         try:
             price = await selected_bot.exchange.ticker_price(selected_settings.symbol)
             now_ms = int(time.time() * 1000)

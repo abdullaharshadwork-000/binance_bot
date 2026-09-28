@@ -263,6 +263,7 @@ class MultiSymbolTradingManager:
         self.portfolio = PortfolioCoordinator(settings)
         self.bots: dict[str, TradingOrchestrator] = {}
         self._control_lock = asyncio.Lock()
+        self._dashboard_price_lock = asyncio.Lock()
 
         symbols = settings.trading_symbols
         profile_path = Path(settings.learning_profile_path)
@@ -319,6 +320,33 @@ class MultiSymbolTradingManager:
                 f"Unknown configured symbol {selected}. "
                 f"Available: {', '.join(self.symbols)}"
             ) from exc
+
+    async def refresh_stopped_market_prices(self) -> dict[str, str]:
+        """Value every configured coin without starting strategies or placing orders."""
+        async with self._dashboard_price_lock:
+            async def refresh(symbol, bot):
+                if bot.running:
+                    return None
+                snapshot = bot.market_snapshot()
+                age = snapshot.get("price_age_ms")
+                if snapshot.get("price") is not None and age is not None and age <= bot.settings.market_data_stale_seconds * 1000:
+                    return None
+                try:
+                    price = await bot.exchange.ticker_price(symbol)
+                    if not math.isfinite(price) or price <= 0:
+                        raise ValueError("Invalid ticker price")
+                    # Starting the engine while the request is in flight transfers
+                    # price ownership back to its market loop.
+                    if not bot.running:
+                        bot.latest_price = price
+                        bot.latest_price_event_ms = int(time.time() * 1000)
+                        bot.latest_price_received_monotonic = time.monotonic()
+                        bot.latest_price_source = "rest-dashboard"
+                except Exception as exc:
+                    return symbol, str(exc)
+                return None
+            results = await asyncio.gather(*(refresh(symbol, bot) for symbol, bot in self.bots.items()))
+            return dict(result for result in results if result is not None)
 
     async def start(self) -> dict[str, bool]:
         async with self._control_lock:

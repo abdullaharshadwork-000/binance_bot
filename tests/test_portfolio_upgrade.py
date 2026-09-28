@@ -348,3 +348,54 @@ def test_paper_launcher_isolates_state_and_disables_exchange_trading(monkeypatch
     assert not settings.allow_multi_symbol_live
     assert not settings.enable_llm_advisor
     assert not settings.enable_adaptive_learning
+
+
+def test_stopped_dashboard_refresh_values_every_coin_without_trading(tmp_path):
+    async def scenario():
+        m = manager(tmp_path)
+        for bot in m.bots.values():
+            bot.exchange.ticker_price = AsyncMock(return_value=100)
+            bot.exchange.market_order = AsyncMock()
+        position(m.get_bot("ETHUSDT"), 2)
+        position(m.get_bot("XRPUSDT"), 3)
+        assert m.portfolio.snapshot()["equity"] is None
+        results = await asyncio.gather(m.refresh_stopped_market_prices(), m.refresh_stopped_market_prices())
+        assert results == [{}, {}]
+        assert m.portfolio.snapshot()["equity"] == 1500
+        for bot in m.bots.values():
+            bot.exchange.ticker_price.assert_awaited_once()
+            bot.exchange.market_order.assert_not_awaited()
+            assert not bot.running
+    asyncio.run(scenario())
+
+
+def test_stopped_price_refresh_isolates_failures_and_skips_running_markets(tmp_path):
+    async def scenario():
+        m = manager(tmp_path)
+        for bot in m.bots.values():
+            bot.exchange.ticker_price = AsyncMock(return_value=100)
+        m.primary_bot.running = True
+        m.get_bot("ETHUSDT").exchange.ticker_price.side_effect = RuntimeError("Offline")
+        errors = await m.refresh_stopped_market_prices()
+        assert errors == {"ETHUSDT": "Offline"}
+        m.primary_bot.exchange.ticker_price.assert_not_awaited()
+        assert m.get_bot("XRPUSDT").latest_price == 100
+        assert m.get_bot("ETHUSDT").latest_price is None
+    asyncio.run(scenario())
+
+
+def test_starting_engine_during_dashboard_refresh_preserves_engine_price(tmp_path):
+    async def scenario():
+        m = manager(tmp_path)
+        bot = m.primary_bot
+        async def starts_during_request(symbol):
+            bot.running = True
+            await tick(bot, 110)
+            return 100
+        for item in m.bots.values():
+            item.exchange.ticker_price = AsyncMock(return_value=100)
+        bot.exchange.ticker_price.side_effect = starts_during_request
+        await m.refresh_stopped_market_prices()
+        assert bot.latest_price == 110
+        assert bot.latest_price_source == "websocket"
+    asyncio.run(scenario())

@@ -305,7 +305,7 @@ function renderSymbolOverview(items,portfolio){
     return;
   }
   $('portfolioStatus').textContent=`Bot open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${num(portfolio?.available_quote,2)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
-  $('portfolioEntryBlock').textContent=portfolio?.entry_block_reason||'Exposure headroom: '+money(portfolio?.exposure_headroom)+'. A valid BUY setup and all other risk checks are still required.';
+  $('portfolioEntryBlock').textContent=rows.every(item=>!item.running)?'Trading engines are stopped. Click Start All Markets to enable strategy cycles in the displayed mode. Starting the server alone does not start trading.':portfolio?.entry_block_reason||'Exposure headroom: '+money(portfolio?.exposure_headroom)+'. A valid BUY setup and all other risk checks are still required.';
   const holdings=Array.isArray(portfolio?.holdings)?portfolio.holdings:[];
   $('portfolioHoldings').textContent=portfolio?.equity==null
     ? 'Account holdings valuation is unavailable. '+(portfolio?.error||'Waiting for fresh balances and prices.')
