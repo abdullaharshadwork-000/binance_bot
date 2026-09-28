@@ -1,6 +1,7 @@
 import uuid
 import math
 import json
+import time
 from decimal import Decimal
 
 from app.config import Settings
@@ -14,6 +15,8 @@ class Broker:
         self.settings = settings
         self.exchange = exchange
         self.db = db
+        self._inventory_checked_at = 0.0
+        self._inventory_issue: str | None = None
         self._init_paper_balances()
 
     @property
@@ -356,6 +359,38 @@ class Broker:
             },
         )
 
+    async def _position_inventory_issue(self, trade: dict) -> str | None:
+        """Detect exchange/local position drift without silently rewriting accounting."""
+        if self.settings.mode == "paper":
+            return None
+        now = time.monotonic()
+        if now - self._inventory_checked_at < self.settings.account_refresh_seconds:
+            return self._inventory_issue
+
+        details = await self.exchange.asset_balance_details(self.settings.base_asset)
+        self._inventory_checked_at = now
+        recorded = float(trade["quantity"])
+        tolerance = max(1e-12, recorded * 1e-8)
+        total = float(details["total"])
+        free = float(details["free"])
+        locked = float(details["locked"])
+
+        if total + tolerance < recorded:
+            self._inventory_issue = (
+                f"Position reconciliation required: local quantity {recorded:.12g} "
+                f"{self.settings.base_asset} exceeds exchange total {total:.12g}. "
+                "Trading is blocked for this position until account/order history is reconciled."
+            )
+        elif free + tolerance < recorded:
+            self._inventory_issue = (
+                f"Position reconciliation required: {locked:.12g} "
+                f"{self.settings.base_asset} is locked outside the bot's local position state. "
+                "Trading is blocked until the lock/order is reconciled."
+            )
+        else:
+            self._inventory_issue = None
+        return self._inventory_issue
+
     async def maybe_exit(self, signal: StrategySignal, price: float) -> ExecutionResult:
         if not math.isfinite(price) or price <= 0:
             return ExecutionResult("HOLD", False, "Invalid exit price; awaiting valid market data")
@@ -368,6 +403,10 @@ class Broker:
                 False,
                 "An earlier Binance order has an unresolved outcome; duplicate exit submission is blocked",
             )
+
+        inventory_issue = await self._position_inventory_issue(trade)
+        if inventory_issue is not None:
+            return ExecutionResult("HOLD", False, inventory_issue)
 
         reason = None
         original_stop = float(trade["stop_price"])
