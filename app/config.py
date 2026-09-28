@@ -124,9 +124,9 @@ class Settings(BaseSettings):
 
         if self.mode == "live" and self.allow_live_trading:
             raise ValueError(
-                "Live order execution is intentionally blocked until exchange-resident "
-                "protective orders and restart-safe protection reconciliation are implemented. "
-                "Use MODE=testnet for execution testing."
+                "Live order execution is intentionally blocked while exchange-resident "
+                "protection is being validated in Testnet. Use MODE=testnet for execution "
+                "and restart/failure testing before any live enablement."
             )
 
         if self.mode in {"testnet", "live"} and not (

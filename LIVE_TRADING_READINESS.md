@@ -83,3 +83,21 @@ API behavior references:
 - The optional LLM advisor can only reduce confidence; it cannot promote an
   otherwise non-qualifying trade.
 - Trading-control HTTP endpoints are restricted to localhost clients.
+
+
+## Testnet exchange-resident protection
+
+The bot now installs a Binance Spot OCO protection list immediately after a
+successful Testnet BUY. The upper leg is a LIMIT_MAKER take-profit and the lower
+leg is a STOP_LOSS. Binance cancels the sibling leg when one executes. The local
+trade persists both the Binance order-list id and list client id, and restart
+reconciliation queries the order list and individual child orders before
+applying a protective fill locally.
+
+Software exits first reconcile the OCO, then cancel it, then submit a market
+SELL. If an OCO leg fills during the cancellation race, the exchange fill wins
+and no second SELL is submitted.
+
+Live mode is still fail-closed. The next release gate is sustained Spot Testnet
+validation of OCO placement, restart recovery, cancellation races, partial fills,
+API timeouts, and locked-balance behavior.

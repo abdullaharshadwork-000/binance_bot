@@ -238,3 +238,22 @@ exponential smoothing; RSI and ATR use alpha 1/14 with the initial observation
 as the seed. Chart providers using Wilder's initial 14-period average or a different
 history length can differ. Regression tests compare EMA, RSI, ATR, momentum and
 volume ratios against independent arithmetic and verify the score breakdown.
+
+
+### Exchange-resident Testnet protection
+
+Testnet BUY fills now receive a Binance Spot OCO SELL protection list: a
+LIMIT_MAKER take-profit above the market and a STOP_LOSS leg below the market.
+The order-list identifiers are persisted on the local trade so the bot can
+reconcile protection after a restart. If Binance reports that a protective leg
+filled, the local trade is closed only after the account fills reconcile to the
+executed quantity.
+
+Software breakeven/trailing logic remains an additional layer. When it chooses
+to exit earlier, the bot first reconciles and cancels the OCO before submitting
+a market SELL, including the race where the OCO fills while cancellation is in
+flight.
+
+This path is currently Testnet-only. Live order execution remains blocked until
+the OCO lifecycle has been validated with restart, timeout, partial-fill and
+network-failure scenarios on Binance Spot Testnet.
