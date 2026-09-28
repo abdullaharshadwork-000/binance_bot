@@ -329,10 +329,12 @@ class BinanceClient:
         take_profit_client_order_id: str,
         stop_client_order_id: str,
     ) -> dict:
-        if self.settings.mode != "testnet":
+        if self.settings.mode not in {"testnet", "live"}:
             raise RuntimeError(
-                "Exchange-resident protection is enabled for Testnet validation only"
+                "Exchange-resident protection requires Binance testnet or live mode"
             )
+        if self.settings.mode == "live" and not self.settings.allow_live_trading:
+            raise RuntimeError("Live exchange protection is disabled by configuration")
         if symbol != self.settings.symbol:
             raise ValueError("Protective order symbol does not match configuration")
         if not all(
