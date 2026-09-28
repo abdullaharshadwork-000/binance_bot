@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     mode: Literal["paper", "testnet", "live"] = "paper"
     allow_live_trading: bool = False
+    live_protection_validated: bool = False
 
     symbol: str = "BTCUSDT"
     base_asset: str = "BTC"
@@ -122,11 +123,11 @@ class Settings(BaseSettings):
                 "until the multi-symbol engine has been validated in Testnet."
             )
 
-        if self.mode == "live" and self.allow_live_trading:
+        if self.mode == "live" and self.allow_live_trading and not self.live_protection_validated:
             raise ValueError(
-                "Live order execution is intentionally blocked while exchange-resident "
-                "protection is being validated in Testnet. Use MODE=testnet for execution "
-                "and restart/failure testing before any live enablement."
+                "Live order execution requires LIVE_PROTECTION_VALIDATED=true after "
+                "successful Binance Spot Testnet validation of OCO placement, restart "
+                "reconciliation, cancellation races, and failure recovery."
             )
 
         if self.mode in {"testnet", "live"} and not (
