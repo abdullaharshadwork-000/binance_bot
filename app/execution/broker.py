@@ -551,10 +551,10 @@ class Broker:
 
         return None
 
-    async def _cancel_exchange_protection(self, trade: dict) -> None:
+    async def _cancel_exchange_protection(self, trade: dict) -> dict | None:
         list_client_id = trade.get("protective_list_client_order_id")
         if self.settings.mode != "testnet" or not list_client_id:
-            return
+            return None
         try:
             await self.exchange.cancel_order_list(
                 self.settings.symbol,
@@ -563,14 +563,19 @@ class Broker:
         except Exception:
             fill = await self._protective_fill(trade)
             if fill is not None:
-                raise RuntimeError(
-                    "Protective order filled while software exit was being prepared"
-                )
+                return fill
             raise
+
+        # A leg can fill at the same moment cancellation reaches the exchange.
+        # Reconcile the list before submitting any replacement market SELL.
+        fill = await self._protective_fill(trade)
+        if fill is not None:
+            return fill
         self.db.clear_trade_protection(
             int(trade["id"]),
             status="CANCELED_FOR_SOFTWARE_EXIT",
         )
+        return None
 
     async def enter(self, signal: StrategySignal, risk: RiskDecision, price: float) -> ExecutionResult:
         if signal.side != SignalSide.BUY:
@@ -838,7 +843,14 @@ class Broker:
             return ExecutionResult("SELL", False, "Live trading blocked: ALLOW_LIVE_TRADING=false")
 
         if self.settings.mode == "testnet":
-            await self._cancel_exchange_protection(trade)
+            protective_fill = await self._cancel_exchange_protection(trade)
+            if protective_fill is not None:
+                return ExecutionResult(
+                    "SELL",
+                    True,
+                    protective_fill["reason"],
+                    protective_fill,
+                )
             trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
             if trade is None:
                 return ExecutionResult(
@@ -846,6 +858,7 @@ class Broker:
                     True,
                     "Position was already closed by exchange protection",
                 )
+            qty = float(trade["quantity"])
 
         inventory_issue = await self._position_inventory_issue(trade)
         if inventory_issue is not None:
