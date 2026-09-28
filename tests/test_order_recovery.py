@@ -23,6 +23,29 @@ def make_broker(tmp_path):
         return_value={"free": 1.0, "locked": 0.0, "total": 1.0}
     )
     exchange.my_trades = AsyncMock(return_value=[])
+    exchange.place_protective_oco = AsyncMock(side_effect=lambda symbol, **kwargs: {
+        "symbol": symbol,
+        "orderListId": 9001,
+        "listClientOrderId": kwargs["list_client_order_id"],
+        "listStatusType": "EXEC_STARTED",
+        "listOrderStatus": "EXECUTING",
+        "orders": [],
+    })
+    exchange.get_order_list = AsyncMock(return_value={
+        "symbol": "BTCUSDT",
+        "orderListId": 9001,
+        "listClientOrderId": "placeholder",
+        "listStatusType": "EXEC_STARTED",
+        "listOrderStatus": "EXECUTING",
+        "orders": [],
+    })
+    exchange.cancel_order_list = AsyncMock(return_value={
+        "symbol": "BTCUSDT",
+        "orderListId": 9001,
+        "listStatusType": "ALL_DONE",
+        "listOrderStatus": "ALL_DONE",
+        "orders": [],
+    })
     exchange.check_entry_liquidity = AsyncMock(return_value={})
     async def fill(symbol, side, quantity, *, client_order_id):
         return {"symbol": symbol, "side": side, "clientOrderId": client_order_id,
@@ -252,5 +275,138 @@ def test_position_drift_blocks_exit_instead_of_silently_closing_wrong_quantity(t
         assert "reconciliation required" in result.message.lower()
         assert broker.db.get_open_trade("BTCUSDT", "testnet") is not None
         assert broker.exchange.market_order.await_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_testnet_buy_installs_exchange_resident_oco(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path)
+        result = await buy(broker)
+
+        assert result.success is True
+        broker.exchange.place_protective_oco.assert_awaited_once()
+        trade = broker.db.get_open_trade("BTCUSDT", "testnet")
+        assert trade["protective_order_list_id"] == "9001"
+        assert trade["protective_list_client_order_id"].startswith("agt-prot-")
+        assert trade["protection_status"] == "EXECUTING"
+
+    asyncio.run(scenario())
+
+
+def test_exchange_protective_fill_closes_local_position_after_restart(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path)
+        await buy(broker)
+        trade = broker.db.get_open_trade("BTCUSDT", "testnet")
+        list_client_id = trade["protective_list_client_order_id"]
+
+        broker.exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 9001,
+            "listClientOrderId": list_client_id,
+            "listStatusType": "ALL_DONE",
+            "listOrderStatus": "ALL_DONE",
+            "orders": [
+                {"symbol": "BTCUSDT", "orderId": 7001, "clientOrderId": "agt-tp-filled"},
+                {"symbol": "BTCUSDT", "orderId": 7002, "clientOrderId": "agt-sl-canceled"},
+            ],
+        })
+
+        async def order_lookup(symbol, *, client_order_id):
+            if client_order_id == "agt-tp-filled":
+                return {
+                    "symbol": symbol,
+                    "clientOrderId": client_order_id,
+                    "orderId": 7001,
+                    "status": "FILLED",
+                    "type": "LIMIT_MAKER",
+                    "side": "SELL",
+                    "price": "102",
+                    "executedQty": "1",
+                    "cummulativeQuoteQty": "102",
+                }
+            return {
+                "symbol": symbol,
+                "clientOrderId": client_order_id,
+                "orderId": 7002,
+                "status": "CANCELED",
+                "type": "STOP_LOSS",
+                "side": "SELL",
+                "price": "0",
+                "executedQty": "0",
+                "cummulativeQuoteQty": "0",
+            }
+
+        broker.exchange.get_order = AsyncMock(side_effect=order_lookup)
+        broker.exchange.my_trades = AsyncMock(return_value=[{
+            "orderId": 7001,
+            "price": "102",
+            "qty": "1",
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }])
+
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0, "hold"),
+            101,
+        )
+
+        assert result.success is True
+        assert result.action == "SELL"
+        assert broker.db.get_open_trade("BTCUSDT", "testnet") is None
+        assert "exchange take profit" in result.message.lower()
+
+    asyncio.run(scenario())
+
+
+def test_software_exit_cancels_oco_before_market_sell(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path)
+        await buy(broker)
+        broker.exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 9001,
+            "listStatusType": "ALL_DONE",
+            "listOrderStatus": "ALL_DONE",
+            "orders": [],
+        })
+
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.SELL, .8, "strategy exit"),
+            100,
+        )
+
+        assert result.success is True
+        broker.exchange.cancel_order_list.assert_awaited_once()
+        assert broker.exchange.market_order.await_count == 2
+        assert broker.db.get_open_trade("BTCUSDT", "testnet") is None
+
+    asyncio.run(scenario())
+
+
+def test_restart_recreates_missing_protection_for_open_testnet_trade(tmp_path):
+    async def scenario():
+        broker = make_broker(tmp_path)
+        broker.db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=1,
+            entry_price=100,
+            entry_fee=0,
+            reason="legacy open position",
+            stop_price=98,
+            take_profit_price=104,
+        )
+
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0, "hold"),
+            100,
+        )
+
+        assert result.action == "HOLD"
+        broker.exchange.place_protective_oco.assert_awaited_once()
+        trade = broker.db.get_open_trade("BTCUSDT", "testnet")
+        assert trade["protective_list_client_order_id"] is not None
 
     asyncio.run(scenario())
