@@ -406,3 +406,26 @@ it does not prove profitability and does not automatically authorize live
 trading. Keep `ALLOW_LIVE_TRADING=false`,
 `LIVE_PROTECTION_VALIDATED=false`, and `ALLOW_MULTI_SYMBOL_LIVE=false` until
 the remaining documented release gates have been deliberately completed.
+
+## Testnet balance cleanup
+
+When Binance Spot Testnet contains pre-funded BTC/ETH/SOL/XRP balances that the
+bot did not open, those holdings count as unmanaged portfolio exposure and can
+block new entries. With the normal bot stopped, run:
+
+```powershell
+python cleanup_testnet_balances.py
+```
+
+The utility refuses to run unless `MODE=testnet` and all live-mode gates remain
+disabled. It also refuses to run if the bot runtime lock is held, if any local
+managed position or unresolved order exists, if a configured asset balance is
+locked, or if Binance has an open order on a configured symbol.
+
+It first prints a normalized SELL plan and then requires the exact confirmation
+`SELL TESTNET` before submitting market SELL orders. Tiny balances that do not
+meet Binance filters are left as dust. If an order submission times out, the
+utility queries the same client order ID and never blindly resubmits.
+
+After cleanup, run `python check_live_readiness.py`, start the bot again, and
+verify `/status` shows unmanaged exposure below `MAX_PORTFOLIO_EXPOSURE_FRACTION`.
