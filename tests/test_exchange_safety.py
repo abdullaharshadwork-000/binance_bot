@@ -394,3 +394,35 @@ def test_live_oco_client_uses_same_spot_order_list_path():
         assert client.base_url == "https://api.binance.com"
 
     asyncio.run(scenario())
+
+
+def test_order_list_query_omits_symbol_parameter():
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            binance_api_key="key",
+            binance_api_secret="secret",
+        )
+        client = BinanceClient(settings)
+        client._request = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 1,
+            "listClientOrderId": "prot-1",
+            "listOrderStatus": "EXECUTING",
+            "orders": [],
+        })
+
+        await client.get_order_list(
+            "BTCUSDT",
+            list_client_order_id="prot-1",
+        )
+
+        client._request.assert_awaited_once_with(
+            "GET",
+            "/api/v3/orderList",
+            {"origClientOrderId": "prot-1"},
+            signed=True,
+        )
+
+    asyncio.run(scenario())
