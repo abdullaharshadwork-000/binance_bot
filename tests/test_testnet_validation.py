@@ -141,27 +141,39 @@ def test_resume_validation_reconciles_and_closes_existing_position(tmp_path):
     exchange.close.return_value = None
 
     broker = AsyncMock()
-    broker.maybe_exit.side_effect = [
-        type("R", (), {"action": "HOLD", "message": "protected", "success": True})(),
-        type("R", (), {"action": "SELL", "message": "closed", "success": True})(),
-    ]
+    calls = {"n": 0}
+
+    async def maybe_exit(signal, price):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return type(
+                "R",
+                (),
+                {"action": "HOLD", "message": "protected", "success": True},
+            )()
+
+        trade = db.get_open_trade("BTCUSDT", "testnet")
+        db.close_trade(
+            int(trade["id"]),
+            100,
+            0,
+            "validation cleanup",
+            executed_quantity=float(trade["quantity"]),
+        )
+        return type(
+            "R",
+            (),
+            {"action": "SELL", "message": "closed", "success": True},
+        )()
+
+    broker.maybe_exit.side_effect = maybe_exit
 
     with patch.object(validator, "Settings", return_value=base), \
          patch.object(validator, "BinanceClient", return_value=exchange), \
          patch.object(validator, "Broker", return_value=broker):
-        original_get_open_trade = TradingDB.get_open_trade
-        calls = {"n": 0}
-
-        def fake_get_open_trade(self, symbol, mode):
-            calls["n"] += 1
-            if calls["n"] <= 2:
-                return original_get_open_trade(self, symbol, mode)
-            return None
-
-        with patch.object(TradingDB, "get_open_trade", new=fake_get_open_trade):
-            result = asyncio.run(
-                validator.resume_validation(validation_db)
-            )
+        result = asyncio.run(
+            validator.resume_validation(validation_db)
+        )
 
     assert result["ok"] is True
     assert result["recovered"] is True
