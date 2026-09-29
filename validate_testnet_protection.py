@@ -77,7 +77,12 @@ async def run_validation(quote_amount: float, database_path: str) -> dict:
             settings.quote_asset,
         )
         stage = "open_orders_safety_check"
-        existing_orders = await exchange.open_orders(settings.symbol)
+        try:
+            existing_orders = await exchange.open_orders(settings.symbol)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{stage}: Binance rejected the account open-order safety query: {exc}"
+            ) from exc
         if existing_orders:
             raise RuntimeError(
                 f"{settings.symbol} already has {len(existing_orders)} open Binance order(s). "
