@@ -664,8 +664,8 @@ class Broker:
                 "Open position did not receive active exchange protection at startup"
             )
         return {
-            "status": "PROTECTION_INSTALLED",
             **protection,
+            "startup_status": "PROTECTION_INSTALLED",
         }
 
     async def _cancel_exchange_protection(self, trade: dict) -> dict | None:
