@@ -1211,3 +1211,110 @@ def test_recovered_buy_gets_exchange_protection_before_reconciliation_completes(
         await exchange.close()
 
     asyncio.run(scenario())
+
+
+
+def test_startup_reconciliation_installs_missing_exchange_protection(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "startup-protection.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.001,
+            entry_price=100.0,
+            entry_fee=0.0,
+            reason="startup-test",
+            stop_price=95.0,
+            take_profit_price=110.0,
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.place_protective_oco = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 8080,
+            "listClientOrderId": "startup-prot",
+            "listOrderStatus": "EXECUTING",
+            "orders": [],
+        })
+
+        broker = Broker(settings, exchange, db)
+        broker._new_protection_ids = lambda: (
+            "startup-prot",
+            "startup-tp",
+            "startup-sl",
+        )
+
+        result = await broker.reconcile_open_position_protection()
+
+        assert result["status"] == "PROTECTION_INSTALLED"
+        trade = db.get_open_trade("BTCUSDT", "testnet")
+        assert trade["protective_list_client_order_id"] == "startup-prot"
+        assert trade["protective_order_list_id"] == "8080"
+        assert trade["protection_status"] == "EXECUTING"
+        exchange.place_protective_oco.assert_awaited_once()
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+def test_startup_reconciliation_fails_closed_on_unknown_protection_state(tmp_path):
+    async def scenario():
+        import pytest
+
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "startup-unknown.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.001,
+            entry_price=100.0,
+            entry_fee=0.0,
+            reason="startup-unknown",
+            stop_price=95.0,
+            take_profit_price=110.0,
+        )
+        db.set_trade_protection(
+            trade_id,
+            order_list_id=None,
+            list_client_order_id="startup-unknown-prot",
+            status="PROTECTION_UNKNOWN",
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 9090,
+            "listClientOrderId": "startup-unknown-prot",
+            "listOrderStatus": "UNKNOWN",
+            "orders": [],
+        })
+
+        broker = Broker(settings, exchange, db)
+        with pytest.raises(RuntimeError, match="could not be verified safely"):
+            await broker.reconcile_open_position_protection()
+
+        assert db.get_open_trade("BTCUSDT", "testnet") is not None
+        await exchange.close()
+
+    asyncio.run(scenario())
