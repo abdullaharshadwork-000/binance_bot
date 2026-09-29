@@ -285,7 +285,7 @@ def test_recover_and_close_verifies_same_persisted_oco(tmp_path):
 
     assert result["ok"] is True
     assert result["same_oco_verified"] is True
-    assert result["protective_order_list_id"] == 777
+    assert result["protective_order_list_id"] == "777"
     assert result["cleanup"]["action"] == "SELL"
     exchange.get_order_list.assert_awaited_once_with(
         "BTCUSDT",
