@@ -1,6 +1,6 @@
 import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.config import Settings
 from app.exchange.binance import BinanceClient
@@ -1316,6 +1316,93 @@ def test_startup_reconciliation_fails_closed_on_unknown_protection_state(tmp_pat
             await broker.reconcile_open_position_protection()
 
         assert db.get_open_trade("BTCUSDT", "testnet") is not None
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+
+def test_readiness_checker_is_read_only_and_reports_clean_testnet_state(tmp_path):
+    import check_live_readiness as readiness
+
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbols="BTCUSDT",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            allow_live_trading=False,
+            live_protection_validated=False,
+            allow_multi_symbol_live=False,
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "readiness.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+
+        exchange = AsyncMock()
+        exchange.ping.return_value = True
+        exchange.account.return_value = {"balances": []}
+        exchange.open_orders.return_value = []
+        exchange.close.return_value = None
+
+        with patch.object(readiness, "Settings", return_value=settings), patch.object(
+            readiness, "BinanceClient", return_value=exchange
+        ):
+            result = await readiness.run_readiness_check()
+
+        assert result["ok"] is True
+        assert result["summary"]["failed"] == 0
+        exchange.ping.assert_awaited_once()
+        exchange.account.assert_awaited_once()
+        exchange.open_orders.assert_awaited_once()
+        assert not hasattr(exchange, "market_order") or exchange.market_order.await_count == 0
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+def test_readiness_checker_rejects_live_enabled_configuration(tmp_path):
+    import check_live_readiness as readiness
+
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="live",
+            symbols="BTCUSDT",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            allow_live_trading=True,
+            live_protection_validated=True,
+            allow_multi_symbol_live=True,
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "readiness-live.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+
+        exchange = AsyncMock()
+        exchange.ping.return_value = True
+        exchange.account.return_value = {"balances": []}
+        exchange.open_orders.return_value = []
+        exchange.close.return_value = None
+
+        with patch.object(readiness, "Settings", return_value=settings), patch.object(
+            readiness, "BinanceClient", return_value=exchange
+        ):
+            result = await readiness.run_readiness_check()
+
+        failed = {item["check"] for item in result["checks"] if not item["ok"]}
+        assert "mode_is_testnet" in failed
+        assert "live_execution_disabled" in failed
+        assert "live_validation_gate_still_closed" in failed
+        assert "multi_symbol_live_disabled" in failed
+        assert result["ok"] is False
         await exchange.close()
 
     asyncio.run(scenario())
