@@ -365,3 +365,22 @@ python validate_testnet_protection.py --recover-offline-fill
 The default target distance is 0.3%. Use conservative Testnet-only amounts. If a
 validation is interrupted or becomes uncertain, use `--resume` instead of
 deleting the validation database.
+
+
+## Fast deterministic stop-loss recovery check
+
+If there is not enough time to wait for BTC Testnet to move through the offline
+stop-loss naturally, run the deterministic recovery test instead:
+
+```powershell
+python -m pytest tests/test_exchange_safety.py -k offline_stop_loss_fill_reconciles_without_duplicate_market_sell -q
+```
+
+This test drives the production broker recovery path with Binance-shaped data for
+an `ALL_DONE` OCO, a canceled take-profit leg, a filled `STOP_LOSS` leg, and
+matching `myTrades` fills. It fails if recovery submits another market SELL,
+uses the wrong fill quantity/price, or leaves the local position open.
+
+This is a deterministic logic/safety test. It is not a substitute for observing
+a real exchange-side Testnet stop trigger, so the live-validation gate remains
+unchanged until the remaining exchange/failure tests are complete.
