@@ -206,14 +206,18 @@ class BinanceClient:
     async def account(self) -> dict:
         return await self._request("GET", "/api/v3/account", signed=True)
 
-    async def open_orders(self, symbol: str) -> list[dict]:
+    async def open_orders(self, symbol: str | None = None) -> list[dict]:
+        # Query account-wide open orders and filter locally. Spot Testnet can
+        # reject the optional symbol parameter even when live REST supports it.
         data = await self._request(
             "GET",
             "/api/v3/openOrders",
-            {"symbol": symbol},
             signed=True,
         )
-        return list(data or [])
+        orders = list(data or [])
+        if symbol is None:
+            return orders
+        return [order for order in orders if order.get("symbol") == symbol]
 
     async def check_entry_liquidity(self, symbol: str, quantity: float, reference_price: float) -> dict:
         """Check visible depth before buying; this cannot guarantee the eventual market fill."""

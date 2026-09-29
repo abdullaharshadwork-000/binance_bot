@@ -68,20 +68,30 @@ async def run_validation(quote_amount: float, database_path: str) -> dict:
             )
 
         exchange = BinanceClient(settings)
+        stage = "ping"
         await exchange.ping()
+        stage = "symbol_validation"
         await exchange.validate_symbol_assets(
             settings.symbol,
             settings.base_asset,
             settings.quote_asset,
         )
-        existing_orders = await exchange.open_orders(settings.symbol)
+        stage = "open_orders_safety_check"
+        try:
+            existing_orders = await exchange.open_orders(settings.symbol)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{stage}: Binance rejected the account open-order safety query: {exc}"
+            ) from exc
         if existing_orders:
             raise RuntimeError(
                 f"{settings.symbol} already has {len(existing_orders)} open Binance order(s). "
                 "Cancel/resolve them before running the isolated protection validation."
             )
 
+        stage = "ticker_price"
         price = await exchange.ticker_price(settings.symbol)
+        stage = "quote_balance"
         quote_balance = await exchange.asset_balance(settings.quote_asset)
         reserve = quote_amount * 1.02
         if quote_balance < reserve:
@@ -99,6 +109,7 @@ async def run_validation(quote_amount: float, database_path: str) -> dict:
             )
 
         broker = Broker(settings, exchange, db)
+        stage = "market_buy_and_oco"
         entry = await broker.enter(
             StrategySignal(SignalSide.BUY, 1.0, "Controlled Testnet protection validation"),
             RiskDecision(True, "Controlled validation quantity", quantity=qty),
@@ -111,6 +122,7 @@ async def run_validation(quote_amount: float, database_path: str) -> dict:
         if not trade or not trade.get("protective_list_client_order_id"):
             raise RuntimeError("BUY succeeded but no exchange protection was persisted")
 
+        stage = "oco_verification"
         order_list = await exchange.get_order_list(
             settings.symbol,
             list_client_order_id=str(trade["protective_list_client_order_id"]),
@@ -122,11 +134,13 @@ async def run_validation(quote_amount: float, database_path: str) -> dict:
 
         # Simulate a restart by closing the first client and constructing a new
         # broker against the same persisted validation database.
+        stage = "restart_simulation"
         await exchange.close()
         exchange = None
         restarted_exchange = BinanceClient(settings)
         restarted_broker = Broker(settings, restarted_exchange, db)
 
+        stage = "restart_reconciliation"
         restart_price = await restarted_exchange.ticker_price(settings.symbol)
         restart_check = await restarted_broker.maybe_exit(
             StrategySignal(SignalSide.HOLD, 0.0, "Restart protection verification"),
@@ -142,6 +156,7 @@ async def run_validation(quote_amount: float, database_path: str) -> dict:
             raise RuntimeError("Restart did not recover exchange protection state")
 
         if post_restart_trade is not None:
+            stage = "cleanup_sell"
             cleanup_price = await restarted_exchange.ticker_price(settings.symbol)
             cleanup = await restarted_broker.maybe_exit(
                 StrategySignal(SignalSide.SELL, 1.0, "Validation cleanup"),
@@ -205,7 +220,19 @@ def main() -> int:
     try:
         result = asyncio.run(run_validation(args.quote_amount, args.database))
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "hint": (
+                        "The validator stops before continuing whenever Binance "
+                        "rejects a safety, entry, protection, or cleanup request."
+                    ),
+                },
+                indent=2,
+            )
+        )
         return 1
 
     print(json.dumps(result, indent=2, default=str))
