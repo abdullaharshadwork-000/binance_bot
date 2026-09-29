@@ -1406,3 +1406,58 @@ def test_readiness_checker_rejects_live_enabled_configuration(tmp_path):
         await exchange.close()
 
     asyncio.run(scenario())
+
+
+def test_readiness_checker_rejects_orphan_bot_open_orders(tmp_path):
+    import check_live_readiness as readiness
+
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbols="BTCUSDT",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            allow_live_trading=False,
+            live_protection_validated=False,
+            allow_multi_symbol_live=False,
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "readiness-orphan.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+
+        exchange = AsyncMock()
+        exchange.ping.return_value = True
+        exchange.account.return_value = {"balances": []}
+        exchange.open_orders.return_value = [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 101,
+                "clientOrderId": "agt-sl-orphan",
+                "side": "SELL",
+                "type": "STOP_LOSS",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 102,
+                "clientOrderId": "agt-tp-orphan",
+                "side": "SELL",
+                "type": "LIMIT_MAKER",
+            },
+        ]
+        exchange.close.return_value = None
+
+        with patch.object(readiness, "Settings", return_value=settings), patch.object(
+            readiness, "BinanceClient", return_value=exchange
+        ):
+            result = await readiness.run_readiness_check()
+
+        failed = {item["check"] for item in result["checks"] if not item["ok"]}
+        assert "BTCUSDT_no_orphan_bot_orders" in failed
+        assert result["ok"] is False
+        await exchange.close()
+
+    asyncio.run(scenario())

@@ -91,11 +91,35 @@ async def run_readiness_check() -> dict:
                 order for order in configured_open if order.get("symbol") == symbol
             ]
             if trade is None:
+                bot_owned_orders = [
+                    order
+                    for order in symbol_orders
+                    if str(order.get("clientOrderId") or "").startswith("agt-")
+                ]
                 checks.append(
                     _item(
                         f"{symbol}_local_position_state",
                         True,
                         "no local open position",
+                    )
+                )
+                checks.append(
+                    _item(
+                        f"{symbol}_no_orphan_bot_orders",
+                        not bot_owned_orders,
+                        (
+                            "none"
+                            if not bot_owned_orders
+                            else json.dumps([
+                                {
+                                    "orderId": order.get("orderId"),
+                                    "clientOrderId": order.get("clientOrderId"),
+                                    "side": order.get("side"),
+                                    "type": order.get("type"),
+                                }
+                                for order in bot_owned_orders
+                            ])
+                        ),
                     )
                 )
                 continue
