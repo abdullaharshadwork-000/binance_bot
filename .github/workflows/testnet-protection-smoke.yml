@@ -1,0 +1,50 @@
+name: Testnet protection smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      quote_amount:
+        description: Approximate Testnet USDT amount for the validation trade
+        required: true
+        default: "25"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: testnet-validation
+    env:
+      MODE: testnet
+      ALLOW_LIVE_TRADING: "false"
+      LIVE_PROTECTION_VALIDATED: "false"
+      BINANCE_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
+      BINANCE_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+      SYMBOL: BTCUSDT
+      SYMBOLS: BTCUSDT
+      QUOTE_ASSET: USDT
+      DATABASE_PATH: data/trading_bot.db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Require Testnet secrets
+        shell: bash
+        run: |
+          test -n "$BINANCE_API_KEY" || (echo "Missing BINANCE_TESTNET_API_KEY" && exit 1)
+          test -n "$BINANCE_API_SECRET" || (echo "Missing BINANCE_TESTNET_API_SECRET" && exit 1)
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run unit tests first
+        run: python -m pytest -q
+
+      - name: Run real Binance Spot Testnet protection validation
+        run: |
+          python validate_testnet_protection.py --quote-amount "${{ inputs.quote_amount }}"

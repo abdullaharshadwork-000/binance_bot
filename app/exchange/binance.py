@@ -206,6 +206,15 @@ class BinanceClient:
     async def account(self) -> dict:
         return await self._request("GET", "/api/v3/account", signed=True)
 
+    async def open_orders(self, symbol: str) -> list[dict]:
+        data = await self._request(
+            "GET",
+            "/api/v3/openOrders",
+            {"symbol": symbol},
+            signed=True,
+        )
+        return list(data or [])
+
     async def check_entry_liquidity(self, symbol: str, quantity: float, reference_price: float) -> dict:
         """Check visible depth before buying; this cannot guarantee the eventual market fill."""
         if not all(math.isfinite(x) and x > 0 for x in (quantity, reference_price)):

@@ -258,3 +258,37 @@ flight.
 The same protection path is used by both Testnet and live exchange modes. Live order execution still requires `ALLOW_LIVE_TRADING=true` and `LIVE_PROTECTION_VALIDATED=true`; keep both live gates disabled until
 the OCO lifecycle has been validated with restart, timeout, partial-fill and
 network-failure scenarios on Binance Spot Testnet.
+
+
+## Real Binance Spot Testnet protection validation
+
+Use the validation harness only while the normal bot is stopped. It performs a
+small real Spot Testnet round trip through the same broker code used by the
+live-capable path:
+
+1. verifies MODE=testnet and API credentials;
+2. refuses to run if the normal bot owns the main database lock;
+3. refuses to run if the selected symbol already has open Binance orders;
+4. buys approximately the requested quote amount on Spot Testnet;
+5. verifies that the Binance OCO protection list exists and is persisted;
+6. recreates the exchange client and broker against the same validation database
+   to simulate a restart;
+7. reconciles the persisted protection after restart;
+8. cancels/reconciles the OCO and sells the validation position.
+
+PowerShell:
+
+```powershell
+python validate_testnet_protection.py --quote-amount 25
+```
+
+The validator uses `data/testnet_protection_validation.db` by default and never
+uses paper fills. If any step becomes uncertain it exits non-zero instead of
+pretending the validation succeeded. Check Binance Testnet open orders and balances
+before retrying after a failed/aborted run.
+
+A manual GitHub Actions workflow named **Testnet protection smoke** is also
+available. It never runs on push or pull request. To use it, configure the
+`testnet-validation` environment with secrets `BINANCE_TESTNET_API_KEY` and
+`BINANCE_TESTNET_API_SECRET`, then manually dispatch the workflow with the
+desired Testnet quote amount.
