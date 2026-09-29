@@ -98,6 +98,8 @@ class TradingOrchestrator:
             item for item in reconciliation
             if not item.get("resolved", False)
         ]
+        if self.settings.mode in {"testnet", "live"}:
+            await self.broker.reconcile_open_position_protection()
         if unresolved:
             ids = ", ".join(
                 str(item.get("client_order_id")) for item in unresolved
