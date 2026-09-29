@@ -193,3 +193,160 @@ def test_resume_validation_reconciles_and_closes_existing_position(tmp_path):
     assert result["ok"] is True
     assert result["recovered"] is True
     assert result["cleanup"]["action"] == "SELL"
+
+
+
+def test_recover_and_close_verifies_same_persisted_oco(tmp_path):
+    base = Settings(
+        _env_file=None,
+        mode="testnet",
+        binance_api_key="key",
+        binance_api_secret="secret",
+        database_path=str(tmp_path / "main.db"),
+    )
+    validation_db = str(tmp_path / "validation.db")
+    db = TradingDB(validation_db)
+    db.init()
+    trade_id = db.open_trade(
+        mode="testnet",
+        symbol="BTCUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="restart-validation",
+        stop_price=95,
+        take_profit_price=110,
+    )
+    db.set_trade_protection(
+        trade_id,
+        order_list_id=777,
+        list_client_order_id="agt-prot-restart",
+        status="EXECUTING",
+    )
+
+    exchange = AsyncMock()
+    exchange.ping.return_value = True
+    exchange.validate_symbol_assets.return_value = None
+    exchange.ticker_price.return_value = 100
+    exchange.get_order_list.return_value = {
+        "symbol": "BTCUSDT",
+        "orderListId": 777,
+        "listClientOrderId": "agt-prot-restart",
+        "listOrderStatus": "EXECUTING",
+        "orders": [],
+    }
+    exchange.close.return_value = None
+
+    broker = AsyncMock()
+    calls = {"n": 0}
+
+    async def maybe_exit(signal, price):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return type(
+                "R",
+                (),
+                {"action": "HOLD", "message": "Open position retained", "success": True},
+            )()
+
+        trade = db.get_open_trade("BTCUSDT", "testnet")
+        db.close_trade(
+            int(trade["id"]),
+            100,
+            0,
+            "restart validation cleanup",
+            executed_quantity=float(trade["quantity"]),
+        )
+        return type(
+            "R",
+            (),
+            {"action": "SELL", "message": "closed", "success": True},
+        )()
+
+    broker.maybe_exit.side_effect = maybe_exit
+    validation_settings = validator.build_validation_settings(base, validation_db)
+
+    with patch.object(
+        validator,
+        "Settings",
+        side_effect=[base, validation_settings],
+    ), patch.object(
+        validator,
+        "BinanceClient",
+        return_value=exchange,
+    ), patch.object(
+        validator,
+        "Broker",
+        return_value=broker,
+    ):
+        result = asyncio.run(
+            validator.recover_and_close_validation(validation_db)
+        )
+
+    assert result["ok"] is True
+    assert result["same_oco_verified"] is True
+    assert result["protective_order_list_id"] == 777
+    assert result["cleanup"]["action"] == "SELL"
+    exchange.get_order_list.assert_awaited_once_with(
+        "BTCUSDT",
+        list_client_order_id="agt-prot-restart",
+    )
+
+
+def test_recover_and_close_fails_on_different_oco_identity(tmp_path):
+    base = Settings(
+        _env_file=None,
+        mode="testnet",
+        binance_api_key="key",
+        binance_api_secret="secret",
+        database_path=str(tmp_path / "main.db"),
+    )
+    validation_db = str(tmp_path / "validation.db")
+    db = TradingDB(validation_db)
+    db.init()
+    trade_id = db.open_trade(
+        mode="testnet",
+        symbol="BTCUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="restart-validation",
+        stop_price=95,
+        take_profit_price=110,
+    )
+    db.set_trade_protection(
+        trade_id,
+        order_list_id=777,
+        list_client_order_id="agt-prot-restart",
+        status="EXECUTING",
+    )
+
+    exchange = AsyncMock()
+    exchange.ping.return_value = True
+    exchange.validate_symbol_assets.return_value = None
+    exchange.get_order_list.return_value = {
+        "symbol": "BTCUSDT",
+        "orderListId": 999,
+        "listClientOrderId": "agt-prot-other",
+        "listOrderStatus": "EXECUTING",
+        "orders": [],
+    }
+    exchange.close.return_value = None
+
+    validation_settings = validator.build_validation_settings(base, validation_db)
+
+    with patch.object(
+        validator,
+        "Settings",
+        side_effect=[base, validation_settings],
+    ), patch.object(
+        validator,
+        "BinanceClient",
+        return_value=exchange,
+    ):
+        with pytest.raises(RuntimeError, match="different OCO client id"):
+            asyncio.run(
+                validator.recover_and_close_validation(validation_db)
+            )
+
+    assert db.get_open_trade("BTCUSDT", "testnet") is not None
