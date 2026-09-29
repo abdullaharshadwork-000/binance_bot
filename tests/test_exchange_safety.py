@@ -426,3 +426,127 @@ def test_order_list_query_omits_symbol_parameter():
         )
 
     asyncio.run(scenario())
+
+
+
+def test_offline_stop_loss_fill_reconciles_without_duplicate_market_sell(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "stop-recovery.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.0003,
+            entry_price=83000.0,
+            entry_fee=0.0,
+            reason="offline-stop-test",
+            stop_price=82917.0,
+            take_profit_price=84000.0,
+        )
+        db.set_trade_protection(
+            trade_id,
+            order_list_id=9001,
+            list_client_order_id="agt-prot-stop-fixture",
+            status="EXECUTING",
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 9001,
+            "listClientOrderId": "agt-prot-stop-fixture",
+            "listOrderStatus": "ALL_DONE",
+            "orders": [
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7001,
+                    "clientOrderId": "agt-tp-stop-fixture",
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7002,
+                    "clientOrderId": "agt-sl-stop-fixture",
+                },
+            ],
+        })
+
+        async def get_order(symbol, *, client_order_id=None, order_id=None):
+            if client_order_id == "agt-tp-stop-fixture":
+                return {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7001,
+                    "clientOrderId": "agt-tp-stop-fixture",
+                    "status": "CANCELED",
+                    "type": "LIMIT_MAKER",
+                    "side": "SELL",
+                    "price": "84000.00000000",
+                    "origQty": "0.00030000",
+                    "executedQty": "0.00000000",
+                    "cummulativeQuoteQty": "0.00000000",
+                }
+            if client_order_id == "agt-sl-stop-fixture":
+                return {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7002,
+                    "clientOrderId": "agt-sl-stop-fixture",
+                    "status": "FILLED",
+                    "type": "STOP_LOSS",
+                    "side": "SELL",
+                    "price": "0.00000000",
+                    "stopPrice": "82917.00000000",
+                    "origQty": "0.00030000",
+                    "executedQty": "0.00030000",
+                    "cummulativeQuoteQty": "24.87000000",
+                }
+            raise AssertionError(f"Unexpected order lookup: {client_order_id}")
+
+        exchange.get_order = AsyncMock(side_effect=get_order)
+        exchange.my_trades = AsyncMock(return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 7002,
+                "price": "82900.00000000",
+                "qty": "0.00030000",
+                "commission": "0.00000000",
+                "commissionAsset": "USDT",
+            }
+        ])
+        exchange.market_order = AsyncMock(
+            side_effect=AssertionError(
+                "Recovery must not submit a duplicate market SELL after OCO stop fill"
+            )
+        )
+
+        broker = Broker(settings, exchange, db)
+        result = await broker.maybe_exit(
+            StrategySignal(
+                SignalSide.HOLD,
+                0.0,
+                "offline stop recovery",
+            ),
+            82900.0,
+        )
+
+        assert result.success is True
+        assert result.action == "SELL"
+        assert result.message == "Exchange stop loss"
+        assert result.details["reason"] == "Exchange stop loss"
+        assert result.details["closed"]["partial"] is False
+        assert result.details["closed"]["executed_quantity"] == 0.0003
+        assert abs(result.details["fill_price"] - 82900.0) < 1e-12
+        assert db.get_open_trade("BTCUSDT", "testnet") is None
+        exchange.market_order.assert_not_awaited()
+        exchange.my_trades.assert_awaited_once_with("BTCUSDT", order_id=7002)
+        await exchange.close()
+
+    asyncio.run(scenario())
