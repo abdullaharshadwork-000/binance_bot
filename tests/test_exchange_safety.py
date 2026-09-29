@@ -550,3 +550,293 @@ def test_offline_stop_loss_fill_reconciles_without_duplicate_market_sell(tmp_pat
         await exchange.close()
 
     asyncio.run(scenario())
+
+
+
+def test_partial_protective_fill_reduces_local_position_once_and_keeps_remaining_protected(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "partial-protection.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.0004,
+            entry_price=83000.0,
+            entry_fee=0.04,
+            reason="partial-test",
+            stop_price=82000.0,
+            take_profit_price=84000.0,
+        )
+        db.set_trade_protection(
+            trade_id,
+            order_list_id=9100,
+            list_client_order_id="agt-prot-partial",
+            status="EXECUTING",
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 9100,
+            "listClientOrderId": "agt-prot-partial",
+            "listOrderStatus": "EXECUTING",
+            "orders": [
+                {
+                    "orderId": 7100,
+                    "clientOrderId": "agt-sl-partial",
+                }
+            ],
+        })
+        exchange.get_order = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderId": 7100,
+            "clientOrderId": "agt-sl-partial",
+            "status": "PARTIALLY_FILLED",
+            "type": "STOP_LOSS",
+            "side": "SELL",
+            "origQty": "0.00040000",
+            "executedQty": "0.00010000",
+            "price": "0.00000000",
+        })
+        exchange.my_trades = AsyncMock(return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 7100,
+                "price": "81950.00000000",
+                "qty": "0.00010000",
+                "commission": "0.00100000",
+                "commissionAsset": "USDT",
+            }
+        ])
+        exchange.market_order = AsyncMock(
+            side_effect=AssertionError("Partial protective fill must not cause a duplicate SELL")
+        )
+
+        broker = Broker(settings, exchange, db)
+        first = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.0, "partial reconciliation"),
+            81950.0,
+        )
+
+        assert first.success is True
+        assert first.action == "SELL"
+        assert first.message == "Exchange stop loss"
+        assert first.details["closed"]["partial"] is True
+        assert first.details["closed"]["executed_quantity"] == 0.0001
+        remaining = db.get_open_trade("BTCUSDT", "testnet")
+        assert remaining is not None
+        assert abs(float(remaining["quantity"]) - 0.0003) < 1e-12
+        assert abs(float(remaining["protective_applied_qty"]) - 0.0001) < 1e-12
+
+        second = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.0, "repeat reconciliation"),
+            81950.0,
+        )
+
+        assert second.success is True
+        assert second.action == "HOLD"
+        assert "partially filled" in second.message.lower()
+        remaining_again = db.get_open_trade("BTCUSDT", "testnet")
+        assert abs(float(remaining_again["quantity"]) - 0.0003) < 1e-12
+        exchange.market_order.assert_not_awaited()
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+def test_cumulative_partial_protective_fill_applies_only_new_delta_then_closes(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "partial-progress.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.0004,
+            entry_price=83000.0,
+            entry_fee=0.04,
+            reason="partial-progress",
+            stop_price=82000.0,
+            take_profit_price=84000.0,
+        )
+        db.set_trade_protection(
+            trade_id,
+            order_list_id=9200,
+            list_client_order_id="agt-prot-progress",
+            status="EXECUTING",
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 9200,
+            "listClientOrderId": "agt-prot-progress",
+            "listOrderStatus": "EXECUTING",
+            "orders": [{"orderId": 7200, "clientOrderId": "agt-sl-progress"}],
+        })
+
+        states = [
+            (
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7200,
+                    "clientOrderId": "agt-sl-progress",
+                    "status": "PARTIALLY_FILLED",
+                    "type": "STOP_LOSS",
+                    "side": "SELL",
+                    "origQty": "0.00040000",
+                    "executedQty": "0.00010000",
+                    "price": "0.00000000",
+                },
+                [
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": 7200,
+                        "price": "81950.00000000",
+                        "qty": "0.00010000",
+                        "commission": "0.00100000",
+                        "commissionAsset": "USDT",
+                    }
+                ],
+            ),
+            (
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7200,
+                    "clientOrderId": "agt-sl-progress",
+                    "status": "PARTIALLY_FILLED",
+                    "type": "STOP_LOSS",
+                    "side": "SELL",
+                    "origQty": "0.00040000",
+                    "executedQty": "0.00025000",
+                    "price": "0.00000000",
+                },
+                [
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": 7200,
+                        "price": "81950.00000000",
+                        "qty": "0.00010000",
+                        "commission": "0.00100000",
+                        "commissionAsset": "USDT",
+                    },
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": 7200,
+                        "price": "81900.00000000",
+                        "qty": "0.00015000",
+                        "commission": "0.00150000",
+                        "commissionAsset": "USDT",
+                    },
+                ],
+            ),
+            (
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7200,
+                    "clientOrderId": "agt-sl-progress",
+                    "status": "FILLED",
+                    "type": "STOP_LOSS",
+                    "side": "SELL",
+                    "origQty": "0.00040000",
+                    "executedQty": "0.00040000",
+                    "price": "0.00000000",
+                },
+                [
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": 7200,
+                        "price": "81950.00000000",
+                        "qty": "0.00010000",
+                        "commission": "0.00100000",
+                        "commissionAsset": "USDT",
+                    },
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": 7200,
+                        "price": "81900.00000000",
+                        "qty": "0.00015000",
+                        "commission": "0.00150000",
+                        "commissionAsset": "USDT",
+                    },
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": 7200,
+                        "price": "81850.00000000",
+                        "qty": "0.00015000",
+                        "commission": "0.00150000",
+                        "commissionAsset": "USDT",
+                    },
+                ],
+            ),
+        ]
+        cursor = {"i": 0}
+
+        async def get_order(symbol, *, client_order_id=None, order_id=None):
+            return states[cursor["i"]][0]
+
+        async def my_trades(symbol, *, order_id=None):
+            fills = states[cursor["i"]][1]
+            cursor["i"] += 1
+            if cursor["i"] == 2:
+                exchange.get_order_list.return_value = {
+                    "symbol": "BTCUSDT",
+                    "orderListId": 9200,
+                    "listClientOrderId": "agt-prot-progress",
+                    "listOrderStatus": "ALL_DONE",
+                    "orders": [{"orderId": 7200, "clientOrderId": "agt-sl-progress"}],
+                }
+            return fills
+
+        exchange.get_order = AsyncMock(side_effect=get_order)
+        exchange.my_trades = AsyncMock(side_effect=my_trades)
+        exchange.market_order = AsyncMock(
+            side_effect=AssertionError("Cumulative protective fills must not create a market SELL")
+        )
+
+        broker = Broker(settings, exchange, db)
+
+        first = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.0, "first partial"),
+            81950.0,
+        )
+        assert first.details["closed"]["executed_quantity"] == 0.0001
+        assert abs(float(db.get_open_trade("BTCUSDT", "testnet")["quantity"]) - 0.0003) < 1e-12
+
+        second = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.0, "second partial"),
+            81900.0,
+        )
+        assert second.details["closed"]["executed_quantity"] == 0.00015
+        assert abs(float(db.get_open_trade("BTCUSDT", "testnet")["quantity"]) - 0.00015) < 1e-12
+
+        third = await broker.maybe_exit(
+            StrategySignal(SignalSide.HOLD, 0.0, "final protective fill"),
+            81850.0,
+        )
+        assert third.details["closed"]["executed_quantity"] == 0.00015
+        assert third.details["closed"]["partial"] is False
+        assert db.get_open_trade("BTCUSDT", "testnet") is None
+        exchange.market_order.assert_not_awaited()
+        await exchange.close()
+
+    asyncio.run(scenario())
