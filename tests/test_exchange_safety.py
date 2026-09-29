@@ -1257,7 +1257,8 @@ def test_startup_reconciliation_installs_missing_exchange_protection(tmp_path):
 
         result = await broker.reconcile_open_position_protection()
 
-        assert result["status"] == "PROTECTION_INSTALLED"
+        assert result["startup_status"] == "PROTECTION_INSTALLED"
+        assert result["status"] == "EXECUTING"
         trade = db.get_open_trade("BTCUSDT", "testnet")
         assert trade["protective_list_client_order_id"] == "startup-prot"
         assert trade["protective_order_list_id"] == "8080"
