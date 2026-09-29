@@ -75,6 +75,11 @@ API behavior references:
 - Terminal Binance orders with complete account fills can be recovered and
   applied after a restart; incomplete or inconsistent recovery data remains
   blocked.
+- A recovered BUY now receives exchange-resident OCO protection during the
+  reconciliation workflow itself, rather than waiting for a later trading cycle.
+- Startup verifies or installs protection for any existing open exchange
+  position before entering the running loop; unknown or inconsistent protection
+  state fails startup closed.
 - Exchange/local position quantity drift is detected and blocks trading instead
   of silently closing a different quantity.
 - Read-only analysis uses the same portfolio equity/capacity/exposure gates as
