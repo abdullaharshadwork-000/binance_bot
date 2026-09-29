@@ -5,6 +5,7 @@ import pytest
 
 import validate_testnet_protection as validator
 from app.config import Settings
+from app.exchange.binance import BinanceClient
 
 
 def test_validation_settings_are_for_isolated_single_symbol_testnet(tmp_path):
@@ -64,3 +65,29 @@ def test_validation_refuses_existing_exchange_orders(tmp_path):
             )
 
     exchange.open_orders.assert_awaited_once_with("BTCUSDT")
+
+
+def test_open_orders_queries_account_wide_then_filters_symbol():
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            binance_api_key="key",
+            binance_api_secret="secret",
+        )
+        client = BinanceClient(settings)
+        client._request = AsyncMock(return_value=[
+            {"symbol": "BTCUSDT", "orderId": 1},
+            {"symbol": "ETHUSDT", "orderId": 2},
+        ])
+
+        orders = await client.open_orders("BTCUSDT")
+
+        assert orders == [{"symbol": "BTCUSDT", "orderId": 1}]
+        client._request.assert_awaited_once_with(
+            "GET",
+            "/api/v3/openOrders",
+            signed=True,
+        )
+
+    asyncio.run(scenario())
