@@ -45,6 +45,107 @@ def build_validation_settings(base: Settings, database_path: str) -> Settings:
     )
 
 
+async def resume_validation(database_path: str) -> dict:
+    base = Settings()
+    if base.mode != "testnet":
+        raise RuntimeError("Validation recovery requires MODE=testnet in .env")
+
+    process_lock = RuntimeFileLock(base.database_path)
+    process_lock.acquire()
+    exchange: BinanceClient | None = None
+    try:
+        settings = build_validation_settings(base, database_path)
+        settings.ensure_directories()
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade = db.get_open_trade(settings.symbol, "testnet")
+        if trade is None:
+            return {
+                "ok": True,
+                "recovered": True,
+                "symbol": settings.symbol,
+                "message": "No open validation position remains in the validation database.",
+                "database": settings.database_path,
+            }
+
+        exchange = BinanceClient(settings)
+        await exchange.ping()
+        await exchange.validate_symbol_assets(
+            settings.symbol,
+            settings.base_asset,
+            settings.quote_asset,
+        )
+
+        broker = Broker(settings, exchange, db)
+        current_price = await exchange.ticker_price(settings.symbol)
+
+        # First reconcile any persisted OCO or install protection if the position
+        # is still open and safely inside its original hard exit levels.
+        reconciliation = await broker.maybe_exit(
+            StrategySignal(
+                SignalSide.HOLD,
+                0.0,
+                "Validation recovery reconciliation",
+            ),
+            current_price,
+        )
+
+        trade = db.get_open_trade(settings.symbol, "testnet")
+        if trade is None:
+            return {
+                "ok": True,
+                "recovered": True,
+                "symbol": settings.symbol,
+                "message": "Validation position was already closed by exchange protection.",
+                "reconciliation": {
+                    "action": reconciliation.action,
+                    "message": reconciliation.message,
+                },
+                "database": settings.database_path,
+            }
+
+        # The local position still exists. Close only this recorded validation
+        # position through the normal broker path, which reconciles/cancels its
+        # OCO before submitting the Testnet market SELL.
+        cleanup_price = await exchange.ticker_price(settings.symbol)
+        cleanup = await broker.maybe_exit(
+            StrategySignal(
+                SignalSide.SELL,
+                1.0,
+                "Validation recovery cleanup",
+            ),
+            cleanup_price,
+        )
+        if not cleanup.success:
+            raise RuntimeError(
+                f"Validation recovery cleanup failed: {cleanup.message}"
+            )
+
+        if db.get_open_trade(settings.symbol, "testnet") is not None:
+            raise RuntimeError(
+                "Validation recovery finished but the local test position is still open"
+            )
+
+        return {
+            "ok": True,
+            "recovered": True,
+            "symbol": settings.symbol,
+            "reconciliation": {
+                "action": reconciliation.action,
+                "message": reconciliation.message,
+            },
+            "cleanup": {
+                "action": cleanup.action,
+                "message": cleanup.message,
+            },
+            "database": settings.database_path,
+        }
+    finally:
+        if exchange is not None:
+            await exchange.close()
+        process_lock.release()
+
+
 async def run_validation(quote_amount: float, database_path: str) -> dict:
     base = Settings()
     if base.mode != "testnet":
@@ -215,10 +316,21 @@ def main() -> int:
         default="data/testnet_protection_validation.db",
         help="Isolated validation database path",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Safely reconcile and close an existing validation position from "
+            "the isolated validation database instead of opening a new one"
+        ),
+    )
     args = parser.parse_args()
 
     try:
-        result = asyncio.run(run_validation(args.quote_amount, args.database))
+        if args.resume:
+            result = asyncio.run(resume_validation(args.database))
+        else:
+            result = asyncio.run(run_validation(args.quote_amount, args.database))
     except Exception as exc:
         print(
             json.dumps(
