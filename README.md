@@ -384,3 +384,25 @@ uses the wrong fill quantity/price, or leaves the local position open.
 This is a deterministic logic/safety test. It is not a substitute for observing
 a real exchange-side Testnet stop trigger, so the live-validation gate remains
 unchanged until the remaining exchange/failure tests are complete.
+
+## Read-only pre-live readiness check
+
+Before making any live-mode decision, keep the bot in Testnet with all live gates
+disabled and run:
+
+```powershell
+python check_live_readiness.py
+```
+
+The checker is intentionally read-only. It does not place, cancel, or modify
+orders and does not change `.env`. It verifies the current configuration, local
+unresolved-order state, Binance Testnet connectivity, signed account access, and
+persisted/exchange OCO identity for any local open Testnet position. It also
+flags configured-symbol open orders whose client IDs do not use the bot's
+`agt-` prefix.
+
+A green result means the inspected operational state is internally consistent;
+it does not prove profitability and does not automatically authorize live
+trading. Keep `ALLOW_LIVE_TRADING=false`,
+`LIVE_PROTECTION_VALIDATED=false`, and `ALLOW_MULTI_SYMBOL_LIVE=false` until
+the remaining documented release gates have been deliberately completed.
