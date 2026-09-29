@@ -6,6 +6,7 @@ import pytest
 import validate_testnet_protection as validator
 from app.config import Settings
 from app.exchange.binance import BinanceClient
+from app.storage.db import TradingDB
 
 
 def test_validation_settings_are_for_isolated_single_symbol_testnet(tmp_path):
@@ -91,3 +92,77 @@ def test_open_orders_queries_account_wide_then_filters_symbol():
         )
 
     asyncio.run(scenario())
+
+
+def test_resume_validation_returns_clean_when_no_local_position(tmp_path):
+    base = Settings(
+        _env_file=None,
+        mode="testnet",
+        binance_api_key="key",
+        binance_api_secret="secret",
+        database_path=str(tmp_path / "main.db"),
+    )
+    with patch.object(validator, "Settings", return_value=base):
+        result = asyncio.run(
+            validator.resume_validation(str(tmp_path / "validation.db"))
+        )
+
+    assert result["ok"] is True
+    assert result["recovered"] is True
+    assert "No open validation position" in result["message"]
+
+
+def test_resume_validation_reconciles_and_closes_existing_position(tmp_path):
+    base = Settings(
+        _env_file=None,
+        mode="testnet",
+        binance_api_key="key",
+        binance_api_secret="secret",
+        database_path=str(tmp_path / "main.db"),
+    )
+    validation_db = str(tmp_path / "validation.db")
+    db = TradingDB(validation_db)
+    db.init()
+    db.open_trade(
+        mode="testnet",
+        symbol="BTCUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="validation",
+        stop_price=95,
+        take_profit_price=110,
+    )
+
+    exchange = AsyncMock()
+    exchange.ping.return_value = True
+    exchange.validate_symbol_assets.return_value = None
+    exchange.ticker_price.return_value = 100
+    exchange.close.return_value = None
+
+    broker = AsyncMock()
+    broker.maybe_exit.side_effect = [
+        type("R", (), {"action": "HOLD", "message": "protected", "success": True})(),
+        type("R", (), {"action": "SELL", "message": "closed", "success": True})(),
+    ]
+
+    with patch.object(validator, "Settings", return_value=base), \
+         patch.object(validator, "BinanceClient", return_value=exchange), \
+         patch.object(validator, "Broker", return_value=broker):
+        original_get_open_trade = TradingDB.get_open_trade
+        calls = {"n": 0}
+
+        def fake_get_open_trade(self, symbol, mode):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return original_get_open_trade(self, symbol, mode)
+            return None
+
+        with patch.object(TradingDB, "get_open_trade", new=fake_get_open_trade):
+            result = asyncio.run(
+                validator.resume_validation(validation_db)
+            )
+
+    assert result["ok"] is True
+    assert result["recovered"] is True
+    assert result["cleanup"]["action"] == "SELL"
