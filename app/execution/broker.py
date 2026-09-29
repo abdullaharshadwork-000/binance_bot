@@ -619,6 +619,55 @@ class Broker:
 
         return None
 
+    async def reconcile_open_position_protection(self) -> dict:
+        """Verify or install exchange protection before the trading loop starts."""
+        trade = self.db.get_open_trade(self.settings.symbol, self.settings.mode)
+        if trade is None or self.settings.mode not in {"testnet", "live"}:
+            return {"status": "NO_OPEN_POSITION"}
+
+        if trade.get("protective_list_client_order_id"):
+            fill = await self._protective_fill(trade)
+            if fill is not None:
+                return {
+                    "status": "EXCHANGE_FILL_RECONCILED",
+                    "fill": fill,
+                }
+            refreshed = self.db.get_open_trade(
+                self.settings.symbol,
+                self.settings.mode,
+            )
+            if refreshed is None:
+                return {"status": "EXCHANGE_FILL_RECONCILED"}
+            status = str(refreshed.get("protection_status") or "UNKNOWN")
+            if status not in {"EXECUTING", "ALL_DONE"}:
+                raise RuntimeError(
+                    "Open position protection could not be verified safely at startup: "
+                    f"{status}"
+                )
+            if status == "ALL_DONE":
+                raise RuntimeError(
+                    "Binance protection is ALL_DONE but no complete protective fill "
+                    "was available to reconcile at startup"
+                )
+            return {
+                "status": "PROTECTED",
+                "protection_status": status,
+                "list_client_order_id": refreshed.get(
+                    "protective_list_client_order_id"
+                ),
+                "order_list_id": refreshed.get("protective_order_list_id"),
+            }
+
+        protection = await self._place_exchange_protection(trade)
+        if str(protection.get("status") or "") != "EXECUTING":
+            raise RuntimeError(
+                "Open position did not receive active exchange protection at startup"
+            )
+        return {
+            "status": "PROTECTION_INSTALLED",
+            **protection,
+        }
+
     async def _cancel_exchange_protection(self, trade: dict) -> dict | None:
         list_client_id = trade.get("protective_list_client_order_id")
         if self.settings.mode not in {"testnet", "live"} or not list_client_id:
