@@ -353,6 +353,19 @@ class Broker:
                         take_profit_price=take_profit_price,
                         client_order_id=client_order_id,
                     )
+                    recovered_trade = self.db.get_open_trade(
+                        self.settings.symbol,
+                        self.settings.mode,
+                    )
+                    if recovered_trade is None:
+                        raise RuntimeError(
+                            "Recovered BUY was applied but the local position could not be reloaded"
+                        )
+                    # Do not leave a recovered exchange position temporarily
+                    # unprotected until the next strategy/risk cycle. Install or
+                    # reconcile exchange-resident OCO protection as part of the
+                    # same startup recovery workflow.
+                    await self._place_exchange_protection(recovered_trade)
                 else:
                     trade = self.db.get_open_trade(
                         self.settings.symbol,
