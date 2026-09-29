@@ -499,7 +499,7 @@ class Broker:
                 client_order_id=str(client_id),
             )
             executed_qty = self.exchange.executed_quantity(order)
-            if str(order.get("status")) != "FILLED" or executed_qty <= 0:
+            if executed_qty <= 0:
                 continue
 
             trades = await self.exchange.my_trades(
@@ -531,6 +531,12 @@ class Broker:
                     "not yet available; local position remains blocked for reconciliation"
                 )
 
+            cumulative_quote = sum(
+                float(item["price"]) * float(item["qty"]) for item in fills
+            )
+            if not math.isfinite(cumulative_quote) or cumulative_quote <= 0:
+                raise RuntimeError("Protective cumulative quote could not be verified")
+
             verified = dict(order)
             verified["fills"] = fills
             fill_price = self.exchange.weighted_fill_price(
@@ -549,19 +555,53 @@ class Broker:
                 )
                 else "Exchange stop loss"
             )
-            closed = self.db.close_trade(
+            applied = self.db.apply_protective_execution(
                 int(trade["id"]),
-                fill_price,
-                fee,
-                reason,
-                executed_quantity=executed_qty,
+                cumulative_quantity=executed_qty,
+                cumulative_quote=cumulative_quote,
+                cumulative_fee_quote=fee,
+                reason=reason,
             )
+
+            order_status = str(order.get("status") or "UNKNOWN")
+            actively_partial = (
+                order_status == "PARTIALLY_FILLED"
+                and list_status == "EXECUTING"
+            )
+            if applied is None:
+                return {
+                    "closed": None,
+                    "fill_price": fill_price,
+                    "exit_fee_quote": fee,
+                    "order": order,
+                    "reason": reason,
+                    "partial_pending": actively_partial,
+                    "applied": False,
+                }
+
+            if not applied.get("applied"):
+                if actively_partial:
+                    return {
+                        "closed": applied,
+                        "fill_price": fill_price,
+                        "exit_fee_quote": fee,
+                        "order": order,
+                        "reason": reason,
+                        "partial_pending": True,
+                        "applied": False,
+                    }
+                continue
+
             return {
-                "closed": closed,
+                "closed": applied,
                 "fill_price": fill_price,
                 "exit_fee_quote": fee,
                 "order": order,
                 "reason": reason,
+                "partial_pending": bool(
+                    applied.get("partial") and actively_partial
+                ),
+                "applied": True,
             }
 
         return None
@@ -789,6 +829,13 @@ class Broker:
         ):
             protective_fill = await self._protective_fill(trade)
             if protective_fill is not None:
+                if protective_fill.get("partial_pending") and not protective_fill.get("applied"):
+                    return ExecutionResult(
+                        "HOLD",
+                        True,
+                        "Exchange protective order partially filled; remaining quantity is still protected",
+                        protective_fill,
+                    )
                 return ExecutionResult(
                     "SELL",
                     True,
@@ -899,6 +946,13 @@ class Broker:
         if self.settings.mode in {"testnet", "live"}:
             protective_fill = await self._cancel_exchange_protection(trade)
             if protective_fill is not None:
+                if protective_fill.get("partial_pending") and not protective_fill.get("applied"):
+                    return ExecutionResult(
+                        "HOLD",
+                        True,
+                        "Exchange protective order partially filled; remaining quantity is still protected",
+                        protective_fill,
+                    )
                 return ExecutionResult(
                     "SELL",
                     True,

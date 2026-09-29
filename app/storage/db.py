@@ -50,6 +50,9 @@ class TradingDB:
                     protective_order_list_id TEXT,
                     protective_list_client_order_id TEXT,
                     protection_status TEXT,
+                    protective_applied_qty REAL NOT NULL DEFAULT 0,
+                    protective_applied_quote REAL NOT NULL DEFAULT 0,
+                    protective_applied_fee_quote REAL NOT NULL DEFAULT 0,
                     opened_at TEXT NOT NULL,
                     closed_at TEXT
                 );
@@ -100,6 +103,18 @@ class TradingDB:
                 conn.execute("ALTER TABLE trades ADD COLUMN protective_list_client_order_id TEXT")
             if "protection_status" not in columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN protection_status TEXT")
+            if "protective_applied_qty" not in columns:
+                conn.execute(
+                    "ALTER TABLE trades ADD COLUMN protective_applied_qty REAL NOT NULL DEFAULT 0"
+                )
+            if "protective_applied_quote" not in columns:
+                conn.execute(
+                    "ALTER TABLE trades ADD COLUMN protective_applied_quote REAL NOT NULL DEFAULT 0"
+                )
+            if "protective_applied_fee_quote" not in columns:
+                conn.execute(
+                    "ALTER TABLE trades ADD COLUMN protective_applied_fee_quote REAL NOT NULL DEFAULT 0"
+                )
             order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
             if "ledger_applied" not in order_columns:
                 # Preserve historical records; every new intent explicitly starts at 0.
@@ -187,6 +202,144 @@ class TradingDB:
             )
             if cur.rowcount != 1:
                 raise ValueError("Open trade not found while updating protection")
+
+    def apply_protective_execution(
+        self,
+        trade_id: int,
+        *,
+        cumulative_quantity: float,
+        cumulative_quote: float,
+        cumulative_fee_quote: float,
+        reason: str,
+    ) -> dict | None:
+        """Apply only the newly observed cumulative protective execution delta."""
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM trades WHERE id=? AND status='OPEN'",
+                (trade_id,),
+            ).fetchone()
+            if not row:
+                return None
+
+            applied_qty = float(row["protective_applied_qty"] or 0.0)
+            applied_quote = float(row["protective_applied_quote"] or 0.0)
+            applied_fee = float(row["protective_applied_fee_quote"] or 0.0)
+            total_qty = max(0.0, float(cumulative_quantity))
+            total_quote = max(0.0, float(cumulative_quote))
+            total_fee = max(0.0, float(cumulative_fee_quote))
+
+            original_qty = float(row["quantity"]) + applied_qty
+            tolerance = max(1e-12, original_qty * 1e-9)
+            if total_qty + tolerance < applied_qty:
+                raise ValueError("Protective cumulative quantity moved backwards")
+            if total_quote + 1e-9 < applied_quote or total_fee + 1e-9 < applied_fee:
+                raise ValueError("Protective cumulative accounting moved backwards")
+
+            delta_qty = max(0.0, total_qty - applied_qty)
+            if delta_qty <= tolerance:
+                return {
+                    "applied": False,
+                    "delta_quantity": 0.0,
+                    "remaining_quantity": float(row["quantity"]),
+                }
+
+            delta_quote = max(0.0, total_quote - applied_quote)
+            delta_fee = max(0.0, total_fee - applied_fee)
+            delta_price = delta_quote / delta_qty if delta_quote > 0 else 0.0
+            if delta_price <= 0:
+                raise ValueError("Protective fill delta has no valid quote value")
+
+            position_qty = float(row["quantity"])
+            if delta_qty > position_qty + tolerance:
+                raise ValueError(
+                    "Protective cumulative execution exceeds remaining local position"
+                )
+            sold_qty = min(position_qty, delta_qty)
+
+            ratio = sold_qty / position_qty if position_qty > 0 else 1.0
+            allocated_entry_fee = float(row["entry_fee"]) * ratio
+            gross = (delta_price - float(row["entry_price"])) * sold_qty
+            pnl = gross - allocated_entry_fee - delta_fee
+            cost = float(row["entry_price"]) * sold_qty
+            pnl_pct = pnl / cost if cost > 0 else 0.0
+            now = datetime.now(timezone.utc).isoformat()
+            remaining = max(0.0, position_qty - sold_qty)
+
+            if remaining > tolerance:
+                remaining_entry_fee = max(
+                    0.0,
+                    float(row["entry_fee"]) - allocated_entry_fee,
+                )
+                conn.execute(
+                    """
+                    UPDATE trades
+                    SET quantity=?, entry_fee=?,
+                        protective_applied_qty=?,
+                        protective_applied_quote=?,
+                        protective_applied_fee_quote=?
+                    WHERE id=?
+                    """,
+                    (
+                        remaining,
+                        remaining_entry_fee,
+                        total_qty,
+                        total_quote,
+                        total_fee,
+                        trade_id,
+                    ),
+                )
+                cur = conn.execute(
+                    """
+                    INSERT INTO trades(
+                        mode, symbol, quantity, entry_price, exit_price,
+                        entry_fee, exit_fee, pnl, pnl_pct, status,
+                        entry_reason, exit_reason, stop_price, take_profit_price,
+                        opened_at, closed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["mode"], row["symbol"], sold_qty, row["entry_price"],
+                        delta_price, allocated_entry_fee, delta_fee, pnl, pnl_pct,
+                        row["entry_reason"], reason, row["stop_price"],
+                        row["take_profit_price"], row["opened_at"], now,
+                    ),
+                )
+                return {
+                    "applied": True,
+                    "id": int(cur.lastrowid),
+                    "source_trade_id": trade_id,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "partial": True,
+                    "executed_quantity": sold_qty,
+                    "remaining_quantity": remaining,
+                }
+
+            conn.execute(
+                """
+                UPDATE trades
+                SET exit_price=?, exit_fee=?, pnl=?, pnl_pct=?, status='CLOSED',
+                    exit_reason=?, closed_at=?,
+                    protective_applied_qty=?,
+                    protective_applied_quote=?,
+                    protective_applied_fee_quote=?
+                WHERE id=?
+                """,
+                (
+                    delta_price, delta_fee, pnl, pnl_pct, reason, now,
+                    total_qty, total_quote, total_fee, trade_id,
+                ),
+            )
+            return {
+                "applied": True,
+                "id": trade_id,
+                "pnl": pnl,
+                "pnl_pct": pnl_pct,
+                "partial": False,
+                "executed_quantity": sold_qty,
+                "remaining_quantity": 0.0,
+            }
 
     def clear_trade_protection(self, trade_id: int, *, status: str | None = None) -> None:
         with self.connection() as conn:
