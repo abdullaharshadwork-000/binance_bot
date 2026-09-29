@@ -1128,3 +1128,86 @@ def test_oco_cancel_timeout_and_reconciliation_failure_blocks_market_sell(tmp_pa
         await exchange.close()
 
     asyncio.run(scenario())
+
+
+
+def test_recovered_buy_gets_exchange_protection_before_reconciliation_completes(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "recover-buy-protection.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        db.record_order_intent(
+            mode="testnet",
+            symbol="BTCUSDT",
+            client_order_id="recover-buy-1",
+            side="BUY",
+            requested_quantity=0.001,
+        )
+        db.update_order_record(
+            client_order_id="recover-buy-1",
+            binance_order_id=None,
+            executed_quantity=0.0,
+            average_fill_price=None,
+            status="UNKNOWN",
+            commission_quote=0.0,
+            commission_details=[],
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.get_order = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "clientOrderId": "recover-buy-1",
+            "orderId": 333,
+            "status": "FILLED",
+            "executedQty": "0.00100000",
+            "cummulativeQuoteQty": "100.00000000",
+        })
+        exchange.my_trades = AsyncMock(return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 333,
+                "price": "100.00000000",
+                "qty": "0.00100000",
+                "commission": "0.00000000",
+                "commissionAsset": "BTC",
+            }
+        ])
+        exchange.normalize_price = AsyncMock(side_effect=lambda symbol, price: price)
+        exchange.place_protective_oco = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 444,
+            "listClientOrderId": "recover-prot",
+            "listOrderStatus": "EXECUTING",
+            "orders": [],
+        })
+
+        broker = Broker(settings, exchange, db)
+        broker._new_protection_ids = lambda: (
+            "recover-prot",
+            "recover-tp",
+            "recover-sl",
+        )
+
+        result = await broker.reconcile_unresolved_orders()
+
+        assert len(result) == 1
+        assert result[0]["resolved"] is True
+        trade = db.get_open_trade("BTCUSDT", "testnet")
+        assert trade is not None
+        assert trade["protective_list_client_order_id"] == "recover-prot"
+        assert trade["protective_order_list_id"] == "444"
+        assert trade["protection_status"] == "EXECUTING"
+        exchange.place_protective_oco.assert_awaited_once()
+        await exchange.close()
+
+    asyncio.run(scenario())
