@@ -292,3 +292,36 @@ available. It never runs on push or pull request. To use it, configure the
 `testnet-validation` environment with secrets `BINANCE_TESTNET_API_KEY` and
 `BINANCE_TESTNET_API_SECRET`, then manually dispatch the workflow with the
 desired Testnet quote amount.
+
+
+## Two-process restart validation
+
+After the one-shot Testnet OCO validation passes, run the stricter restart test in
+two separate Python processes.
+
+Phase 1 opens a small real Spot Testnet position, verifies the exact Binance OCO,
+persists its identifiers, and then exits the Python process while leaving the
+position protected on Binance:
+
+```powershell
+python validate_testnet_protection.py --open-and-exit --quote-amount 25
+```
+
+Do not start the normal bot between phases. In a new PowerShell invocation, run:
+
+```powershell
+python validate_testnet_protection.py --recover-and-close
+```
+
+Phase 2 refuses to recreate missing protection. It must rediscover the exact same
+`listClientOrderId` and `orderListId` persisted by phase 1. If the OCO is still
+active, the validator reconciles it and cleanly closes the validation position. If
+a protective leg filled while the bot was stopped, the broker reconciles that
+exchange fill instead.
+
+If either phase fails, use the conservative recovery command rather than deleting
+the validation database:
+
+```powershell
+python validate_testnet_protection.py --resume
+```

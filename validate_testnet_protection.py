@@ -45,6 +45,247 @@ def build_validation_settings(base: Settings, database_path: str) -> Settings:
     )
 
 
+async def open_and_exit_validation(quote_amount: float, database_path: str) -> dict:
+    base = Settings()
+    if base.mode != "testnet":
+        raise RuntimeError("Process-restart validation requires MODE=testnet in .env")
+    if quote_amount <= 0:
+        raise ValueError("--quote-amount must be positive")
+
+    process_lock = RuntimeFileLock(base.database_path)
+    process_lock.acquire()
+    exchange: BinanceClient | None = None
+    try:
+        settings = build_validation_settings(base, database_path)
+        settings.ensure_directories()
+        db = TradingDB(settings.database_path)
+        db.init()
+
+        if db.get_open_trade(settings.symbol, "testnet") is not None:
+            raise RuntimeError(
+                f"Validation database already has an open {settings.symbol} position; "
+                "use --recover-and-close before starting another restart test"
+            )
+
+        exchange = BinanceClient(settings)
+        await exchange.ping()
+        await exchange.validate_symbol_assets(
+            settings.symbol,
+            settings.base_asset,
+            settings.quote_asset,
+        )
+
+        existing_orders = await exchange.open_orders(settings.symbol)
+        if existing_orders:
+            raise RuntimeError(
+                f"{settings.symbol} already has {len(existing_orders)} open Binance order(s). "
+                "Resolve them before starting the isolated restart test."
+            )
+
+        price = await exchange.ticker_price(settings.symbol)
+        quote_balance = await exchange.asset_balance(settings.quote_asset)
+        reserve = quote_amount * 1.02
+        if quote_balance < reserve:
+            raise RuntimeError(
+                f"Insufficient Testnet {settings.quote_asset}: need about {reserve:.8g}, "
+                f"available {quote_balance:.8g}"
+            )
+
+        requested_qty = quote_amount / price
+        qty = await exchange.normalize_quantity(settings.symbol, requested_qty, price)
+        if qty <= 0:
+            raise RuntimeError(
+                "Requested validation amount is below Binance quantity/notional limits. "
+                "Increase --quote-amount."
+            )
+
+        broker = Broker(settings, exchange, db)
+        entry = await broker.enter(
+            StrategySignal(
+                SignalSide.BUY,
+                1.0,
+                "Two-process Testnet restart validation",
+            ),
+            RiskDecision(True, "Controlled validation quantity", quantity=qty),
+            price,
+        )
+        if not entry.success:
+            raise RuntimeError(f"Restart-test BUY failed: {entry.message}")
+
+        trade = db.get_open_trade(settings.symbol, "testnet")
+        if trade is None or not trade.get("protective_list_client_order_id"):
+            raise RuntimeError(
+                "Restart-test BUY succeeded but persisted OCO protection is missing"
+            )
+
+        order_list = await exchange.get_order_list(
+            settings.symbol,
+            list_client_order_id=str(trade["protective_list_client_order_id"]),
+        )
+        if str(order_list.get("listClientOrderId") or "") != str(
+            trade["protective_list_client_order_id"]
+        ):
+            raise RuntimeError("Binance returned a different OCO client id")
+        if str(order_list.get("orderListId")) != str(
+            trade.get("protective_order_list_id")
+        ):
+            raise RuntimeError("Binance returned a different OCO order-list id")
+        if str(order_list.get("listOrderStatus") or "") != "EXECUTING":
+            raise RuntimeError(
+                "Restart test requires an actively protected position before process exit; "
+                f"Binance reported {order_list.get('listOrderStatus')}"
+            )
+
+        return {
+            "ok": True,
+            "phase": "open_and_exit",
+            "symbol": settings.symbol,
+            "message": (
+                "Testnet position and OCO are active. This command is ending now. "
+                "Do not start the normal bot; run --recover-and-close in a new process."
+            ),
+            "trade_id": int(trade["id"]),
+            "quantity": float(trade["quantity"]),
+            "entry_price": float(trade["entry_price"]),
+            "stop_price": float(trade["stop_price"]),
+            "take_profit_price": float(trade["take_profit_price"]),
+            "protective_list_client_order_id": trade["protective_list_client_order_id"],
+            "protective_order_list_id": trade["protective_order_list_id"],
+            "protection_status": trade["protection_status"],
+            "database": settings.database_path,
+        }
+    finally:
+        if exchange is not None:
+            await exchange.close()
+        process_lock.release()
+
+
+async def recover_and_close_validation(database_path: str) -> dict:
+    base = Settings()
+    if base.mode != "testnet":
+        raise RuntimeError("Process-restart recovery requires MODE=testnet in .env")
+
+    process_lock = RuntimeFileLock(base.database_path)
+    process_lock.acquire()
+    exchange: BinanceClient | None = None
+    try:
+        settings = build_validation_settings(base, database_path)
+        settings.ensure_directories()
+        db = TradingDB(settings.database_path)
+        db.init()
+
+        trade = db.get_open_trade(settings.symbol, "testnet")
+        if trade is None:
+            raise RuntimeError(
+                "No open validation position exists. Run --open-and-exit first."
+            )
+
+        list_client_id = trade.get("protective_list_client_order_id")
+        order_list_id = trade.get("protective_order_list_id")
+        if not list_client_id or order_list_id is None:
+            raise RuntimeError(
+                "Stored validation position has no persisted Binance OCO identity; "
+                "use --resume for conservative recovery instead"
+            )
+
+        exchange = BinanceClient(settings)
+        await exchange.ping()
+        await exchange.validate_symbol_assets(
+            settings.symbol,
+            settings.base_asset,
+            settings.quote_asset,
+        )
+
+        # The critical assertion for this phase: a fresh Python process must
+        # rediscover the exact OCO created by the previous process. Do not
+        # recreate missing protection here; fail closed if it cannot be found.
+        order_list = await exchange.get_order_list(
+            settings.symbol,
+            list_client_order_id=str(list_client_id),
+        )
+        if str(order_list.get("listClientOrderId") or "") != str(list_client_id):
+            raise RuntimeError("Restart recovery found a different OCO client id")
+        if str(order_list.get("orderListId")) != str(order_list_id):
+            raise RuntimeError("Restart recovery found a different Binance order-list id")
+        if str(order_list.get("symbol") or "") != settings.symbol:
+            raise RuntimeError("Restart recovery OCO symbol mismatch")
+
+        status_before = str(order_list.get("listOrderStatus") or "UNKNOWN")
+        if status_before not in {"EXECUTING", "ALL_DONE"}:
+            raise RuntimeError(
+                f"Unexpected persisted OCO status after real process restart: {status_before}"
+            )
+
+        broker = Broker(settings, exchange, db)
+        current_price = await exchange.ticker_price(settings.symbol)
+        reconciliation = await broker.maybe_exit(
+            StrategySignal(
+                SignalSide.HOLD,
+                0.0,
+                "Real process restart reconciliation",
+            ),
+            current_price,
+        )
+
+        trade_after_reconcile = db.get_open_trade(settings.symbol, "testnet")
+        if trade_after_reconcile is None:
+            return {
+                "ok": True,
+                "phase": "recover_and_close",
+                "symbol": settings.symbol,
+                "same_oco_verified": True,
+                "oco_status_before_reconciliation": status_before,
+                "message": "Exchange protection closed the position while the bot was stopped.",
+                "reconciliation": {
+                    "action": reconciliation.action,
+                    "message": reconciliation.message,
+                },
+                "database": settings.database_path,
+            }
+
+        cleanup_price = await exchange.ticker_price(settings.symbol)
+        cleanup = await broker.maybe_exit(
+            StrategySignal(
+                SignalSide.SELL,
+                1.0,
+                "Real process restart validation cleanup",
+            ),
+            cleanup_price,
+        )
+        if not cleanup.success:
+            raise RuntimeError(
+                f"Restart validation cleanup SELL failed: {cleanup.message}"
+            )
+
+        if db.get_open_trade(settings.symbol, "testnet") is not None:
+            raise RuntimeError(
+                "Restart validation cleanup returned success but position is still open"
+            )
+
+        return {
+            "ok": True,
+            "phase": "recover_and_close",
+            "symbol": settings.symbol,
+            "same_oco_verified": True,
+            "protective_list_client_order_id": list_client_id,
+            "protective_order_list_id": order_list_id,
+            "oco_status_before_reconciliation": status_before,
+            "reconciliation": {
+                "action": reconciliation.action,
+                "message": reconciliation.message,
+            },
+            "cleanup": {
+                "action": cleanup.action,
+                "message": cleanup.message,
+            },
+            "database": settings.database_path,
+        }
+    finally:
+        if exchange is not None:
+            await exchange.close()
+        process_lock.release()
+
+
 async def resume_validation(database_path: str) -> dict:
     base = Settings()
     if base.mode != "testnet":
@@ -324,11 +565,47 @@ def main() -> int:
             "the isolated validation database instead of opening a new one"
         ),
     )
+    parser.add_argument(
+        "--open-and-exit",
+        action="store_true",
+        help=(
+            "Open a small real Testnet position, verify its OCO, then end this "
+            "Python process while leaving the position protected on Binance"
+        ),
+    )
+    parser.add_argument(
+        "--recover-and-close",
+        action="store_true",
+        help=(
+            "In a new Python process, verify the exact persisted OCO survived "
+            "the restart, reconcile it, and close the validation position"
+        ),
+    )
     args = parser.parse_args()
+    selected_modes = sum(
+        bool(value)
+        for value in (
+            args.resume,
+            args.open_and_exit,
+            args.recover_and_close,
+        )
+    )
+    if selected_modes > 1:
+        parser.error(
+            "Choose only one of --resume, --open-and-exit, or --recover-and-close"
+        )
 
     try:
         if args.resume:
             result = asyncio.run(resume_validation(args.database))
+        elif args.open_and_exit:
+            result = asyncio.run(
+                open_and_exit_validation(args.quote_amount, args.database)
+            )
+        elif args.recover_and_close:
+            result = asyncio.run(
+                recover_and_close_validation(args.database)
+            )
         else:
             result = asyncio.run(run_validation(args.quote_amount, args.database))
     except Exception as exc:
