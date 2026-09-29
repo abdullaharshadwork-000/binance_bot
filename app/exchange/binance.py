@@ -383,11 +383,13 @@ class BinanceClient:
         *,
         list_client_order_id: str,
     ) -> dict:
+        # Binance Spot Query Order List does not accept a symbol parameter.
+        # Keep symbol in this method signature for call-site symmetry, but use
+        # only the order-list client id in the signed request.
         return await self._request(
             "GET",
             "/api/v3/orderList",
             {
-                "symbol": symbol,
                 "origClientOrderId": list_client_order_id,
             },
             signed=True,
