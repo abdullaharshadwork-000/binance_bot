@@ -325,3 +325,43 @@ the validation database:
 ```powershell
 python validate_testnet_protection.py --resume
 ```
+
+
+## Offline Binance protective-fill validation
+
+After the two-process restart test passes, validate that Binance can close the
+position while Python is completely stopped.
+
+Open a Testnet position with a deliberately closer take-profit leg:
+
+```powershell
+python validate_testnet_protection.py --open-offline-fill --target tp --trigger-pct 0.003 --quote-amount 25
+```
+
+The command exits with the OCO active on Binance. Keep the normal bot stopped.
+After Testnet price reaches the take-profit, run:
+
+```powershell
+python validate_testnet_protection.py --recover-offline-fill
+```
+
+The recovery command only passes when Binance reports the OCO is `ALL_DONE`,
+the broker reconstructs the exchange protective fill, the local position closes,
+and no new bot market SELL order is recorded during recovery. If the OCO is still
+`EXECUTING`, the command fails without modifying or closing the position.
+
+To test the stop-loss side separately:
+
+```powershell
+python validate_testnet_protection.py --open-offline-fill --target sl --trigger-pct 0.003 --quote-amount 25
+```
+
+Then, after the stop executes on Binance while Python remains stopped:
+
+```powershell
+python validate_testnet_protection.py --recover-offline-fill
+```
+
+The default target distance is 0.3%. Use conservative Testnet-only amounts. If a
+validation is interrupted or becomes uncertain, use `--resume` instead of
+deleting the validation database.
