@@ -826,14 +826,14 @@ def test_cumulative_partial_protective_fill_applies_only_new_delta_then_closes(t
             StrategySignal(SignalSide.HOLD, 0.0, "second partial"),
             81900.0,
         )
-        assert second.details["closed"]["executed_quantity"] == 0.00015
+        assert abs(second.details["closed"]["executed_quantity"] - 0.00015) < 1e-12
         assert abs(float(db.get_open_trade("BTCUSDT", "testnet")["quantity"]) - 0.00015) < 1e-12
 
         third = await broker.maybe_exit(
             StrategySignal(SignalSide.HOLD, 0.0, "final protective fill"),
             81850.0,
         )
-        assert third.details["closed"]["executed_quantity"] == 0.00015
+        assert abs(third.details["closed"]["executed_quantity"] - 0.00015) < 1e-12
         assert third.details["closed"]["partial"] is False
         assert db.get_open_trade("BTCUSDT", "testnet") is None
         exchange.market_order.assert_not_awaited()
