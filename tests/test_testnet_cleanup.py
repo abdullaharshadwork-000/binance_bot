@@ -138,8 +138,8 @@ def test_execute_cleanup_reconciles_submit_timeout_by_client_id(monkeypatch):
             "executedQty": "0.5",
             "cummulativeQuoteQty": "42000",
         }
-        client.executed_quantity.return_value = 0.5
-        client.weighted_fill_price.return_value = 84000.0
+        client.executed_quantity = lambda order: 0.5
+        client.weighted_fill_price = lambda order, fallback: 84000.0
 
         monkeypatch.setattr(
             cleanup.uuid,
