@@ -168,9 +168,24 @@ def test_resume_validation_reconciles_and_closes_existing_position(tmp_path):
 
     broker.maybe_exit.side_effect = maybe_exit
 
-    with patch.object(validator, "Settings", return_value=base), \
-         patch.object(validator, "BinanceClient", return_value=exchange), \
-         patch.object(validator, "Broker", return_value=broker):
+    validation_settings = validator.build_validation_settings(
+        base,
+        validation_db,
+    )
+
+    with patch.object(
+        validator,
+        "Settings",
+        side_effect=[base, validation_settings],
+    ), patch.object(
+        validator,
+        "BinanceClient",
+        return_value=exchange,
+    ), patch.object(
+        validator,
+        "Broker",
+        return_value=broker,
+    ):
         result = asyncio.run(
             validator.resume_validation(validation_db)
         )
