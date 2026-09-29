@@ -840,3 +840,291 @@ def test_cumulative_partial_protective_fill_applies_only_new_delta_then_closes(t
         await exchange.close()
 
     asyncio.run(scenario())
+
+
+
+def test_oco_submit_timeout_reconciles_by_same_client_id(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "oco-submit-timeout.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.001,
+            entry_price=100.0,
+            entry_fee=0.0,
+            reason="timeout-test",
+            stop_price=95.0,
+            take_profit_price=110.0,
+        )
+        exchange = BinanceClient(settings)
+        exchange.place_protective_oco = AsyncMock(
+            side_effect=TimeoutError("submit timeout")
+        )
+        exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 12345,
+            "listClientOrderId": "fixed-protection-id",
+            "listOrderStatus": "EXECUTING",
+            "orders": [],
+        })
+
+        broker = Broker(settings, exchange, db)
+        broker._new_protection_ids = lambda: (
+            "fixed-protection-id",
+            "fixed-tp-id",
+            "fixed-sl-id",
+        )
+
+        result = await broker._place_exchange_protection(
+            db.get_open_trade("BTCUSDT", "testnet")
+        )
+
+        assert result["protected"] is True
+        assert result["status"] == "EXECUTING"
+        assert result["list_client_order_id"] == "fixed-protection-id"
+        assert result["order_list_id"] == 12345
+
+        trade = db.get_open_trade("BTCUSDT", "testnet")
+        assert trade["protective_list_client_order_id"] == "fixed-protection-id"
+        assert trade["protective_order_list_id"] == "12345"
+        assert trade["protection_status"] == "EXECUTING"
+        exchange.place_protective_oco.assert_awaited_once()
+        exchange.get_order_list.assert_awaited_once_with(
+            "BTCUSDT",
+            list_client_order_id="fixed-protection-id",
+        )
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+def test_oco_submit_and_reconciliation_failure_persists_unknown_and_does_not_retry(tmp_path):
+    async def scenario():
+        import pytest
+
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "oco-submit-unknown.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.001,
+            entry_price=100.0,
+            entry_fee=0.0,
+            reason="timeout-test",
+            stop_price=95.0,
+            take_profit_price=110.0,
+        )
+        exchange = BinanceClient(settings)
+        exchange.place_protective_oco = AsyncMock(
+            side_effect=TimeoutError("submit timeout")
+        )
+        exchange.get_order_list = AsyncMock(
+            side_effect=TimeoutError("reconcile timeout")
+        )
+
+        broker = Broker(settings, exchange, db)
+        broker._new_protection_ids = lambda: (
+            "unknown-protection-id",
+            "unknown-tp-id",
+            "unknown-sl-id",
+        )
+
+        with pytest.raises(RuntimeError, match="outcome is uncertain"):
+            await broker._place_exchange_protection(
+                db.get_open_trade("BTCUSDT", "testnet")
+            )
+
+        trade = db.get_open_trade("BTCUSDT", "testnet")
+        assert trade["protective_list_client_order_id"] == "unknown-protection-id"
+        assert trade["protective_order_list_id"] is None
+        assert trade["protection_status"] == "PROTECTION_UNKNOWN"
+
+        second = await broker._place_exchange_protection(trade)
+        assert second["protected"] is True
+        assert second["status"] == "PROTECTION_UNKNOWN"
+        assert second["list_client_order_id"] == "unknown-protection-id"
+        assert exchange.place_protective_oco.await_count == 1
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+def test_oco_cancel_timeout_with_fill_reconciles_without_duplicate_market_sell(tmp_path):
+    async def scenario():
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "oco-cancel-race.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.001,
+            entry_price=100.0,
+            entry_fee=0.0,
+            reason="cancel-race",
+            stop_price=95.0,
+            take_profit_price=110.0,
+        )
+        db.set_trade_protection(
+            trade_id,
+            order_list_id=555,
+            list_client_order_id="cancel-race-list",
+            status="EXECUTING",
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.asset_balance_details = AsyncMock(return_value={
+            "free": 0.0,
+            "locked": 0.001,
+            "total": 0.001,
+        })
+        exchange.cancel_order_list = AsyncMock(
+            side_effect=TimeoutError("cancel timeout")
+        )
+        exchange.get_order_list = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderListId": 555,
+            "listClientOrderId": "cancel-race-list",
+            "listOrderStatus": "ALL_DONE",
+            "orders": [
+                {
+                    "orderId": 556,
+                    "clientOrderId": "cancel-race-sl",
+                }
+            ],
+        })
+        exchange.get_order = AsyncMock(return_value={
+            "symbol": "BTCUSDT",
+            "orderId": 556,
+            "clientOrderId": "cancel-race-sl",
+            "status": "FILLED",
+            "type": "STOP_LOSS",
+            "side": "SELL",
+            "origQty": "0.00100000",
+            "executedQty": "0.00100000",
+            "price": "0.00000000",
+        })
+        exchange.my_trades = AsyncMock(return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "orderId": 556,
+                "price": "94.50000000",
+                "qty": "0.00100000",
+                "commission": "0.00000000",
+                "commissionAsset": "USDT",
+            }
+        ])
+        exchange.market_order = AsyncMock(
+            side_effect=AssertionError(
+                "Cancel timeout race must not submit duplicate market SELL"
+            )
+        )
+
+        broker = Broker(settings, exchange, db)
+        result = await broker.maybe_exit(
+            StrategySignal(SignalSide.SELL, 1.0, "software exit"),
+            99.0,
+        )
+
+        assert result.success is True
+        assert result.action == "SELL"
+        assert result.message == "Exchange stop loss"
+        assert db.get_open_trade("BTCUSDT", "testnet") is None
+        exchange.market_order.assert_not_awaited()
+        await exchange.close()
+
+    asyncio.run(scenario())
+
+
+def test_oco_cancel_timeout_and_reconciliation_failure_blocks_market_sell(tmp_path):
+    async def scenario():
+        import pytest
+
+        settings = Settings(
+            _env_file=None,
+            mode="testnet",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            binance_api_key="key",
+            binance_api_secret="secret",
+            database_path=str(tmp_path / "oco-cancel-unknown.db"),
+        )
+        db = TradingDB(settings.database_path)
+        db.init()
+        trade_id = db.open_trade(
+            mode="testnet",
+            symbol="BTCUSDT",
+            quantity=0.001,
+            entry_price=100.0,
+            entry_fee=0.0,
+            reason="cancel-unknown",
+            stop_price=95.0,
+            take_profit_price=110.0,
+        )
+        db.set_trade_protection(
+            trade_id,
+            order_list_id=600,
+            list_client_order_id="cancel-unknown-list",
+            status="EXECUTING",
+        )
+
+        exchange = BinanceClient(settings)
+        exchange.asset_balance_details = AsyncMock(return_value={
+            "free": 0.0,
+            "locked": 0.001,
+            "total": 0.001,
+        })
+        exchange.cancel_order_list = AsyncMock(
+            side_effect=TimeoutError("cancel timeout")
+        )
+        exchange.get_order_list = AsyncMock(
+            side_effect=TimeoutError("status timeout")
+        )
+        exchange.market_order = AsyncMock(
+            side_effect=AssertionError(
+                "Unknown cancel outcome must never submit market SELL"
+            )
+        )
+
+        broker = Broker(settings, exchange, db)
+        with pytest.raises(TimeoutError, match="status timeout"):
+            await broker.maybe_exit(
+                StrategySignal(SignalSide.SELL, 1.0, "software exit"),
+                99.0,
+            )
+
+        assert db.get_open_trade("BTCUSDT", "testnet") is not None
+        exchange.market_order.assert_not_awaited()
+        await exchange.close()
+
+    asyncio.run(scenario())
