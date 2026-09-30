@@ -604,9 +604,9 @@ class TradingDB:
             ).fetchone()
             return float(row["total"] or 0.0)
 
-    def performance_summary(self, *, mode: str, symbol: str) -> dict:
-        """Return realized analytics for all closed trades in this mode/symbol."""
-        trades = list(reversed(self.closed_trades(mode=mode, symbol=symbol)))
+    @staticmethod
+    def _performance_from_trades(trades: list[dict]) -> dict:
+        """Build realized performance analytics from chronologically ordered closes."""
         if not trades:
             return {
                 "closed_trades": 0,
@@ -640,6 +640,7 @@ class TradingDB:
             max_drawdown = max(max_drawdown, peak - cumulative)
             curve.append({
                 "id": int(trade["id"]),
+                "symbol": trade.get("symbol"),
                 "closed_at": trade.get("closed_at"),
                 "cumulative_pnl": round(cumulative, 8),
             })
@@ -658,6 +659,30 @@ class TradingDB:
             "max_drawdown": max_drawdown,
             "equity_curve": curve[-100:],
         }
+
+    def performance_summary(self, *, mode: str, symbol: str) -> dict:
+        """Return realized analytics for all closed trades in this mode/symbol."""
+        trades = list(reversed(self.closed_trades(mode=mode, symbol=symbol)))
+        return self._performance_from_trades(trades)
+
+    def performance_summary_portfolio(
+        self,
+        *,
+        mode: str,
+        symbols: list[str],
+    ) -> dict:
+        """Return realized analytics across configured symbols ordered by close time."""
+        if not symbols:
+            return self._performance_from_trades([])
+        placeholders = ",".join("?" for _ in symbols)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM trades WHERE status='CLOSED' AND mode=? "
+                f"AND symbol IN ({placeholders}) "
+                "ORDER BY closed_at ASC, id ASC",
+                (mode, *symbols),
+            ).fetchall()
+        return self._performance_from_trades([dict(row) for row in rows])
 
     def record_order_intent(
         self,
