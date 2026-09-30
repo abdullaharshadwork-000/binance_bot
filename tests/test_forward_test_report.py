@@ -163,9 +163,60 @@ def test_forward_report_tracks_learning_progress_and_per_symbol(tmp_path):
     )
 
     assert report["closed_trades"] == 2
-    assert report["trades_until_learning"] == 8
+    assert report["learning_threshold_per_symbol"] == 10
+    assert report["learning_progress"]["BTCUSDT"] == {
+        "closed_trades": 1,
+        "threshold": 10,
+        "trades_until_learning": 9,
+        "eligible": False,
+    }
+    assert report["learning_progress"]["ETHUSDT"] == {
+        "closed_trades": 1,
+        "threshold": 10,
+        "trades_until_learning": 9,
+        "eligible": False,
+    }
     assert report["raw"]["wins"] == 1
     assert report["raw"]["losses"] == 1
     assert report["per_symbol"]["BTCUSDT"]["raw"]["total_pnl"] == 5.0
     assert report["per_symbol"]["ETHUSDT"]["raw"]["total_pnl"] == -5.0
     assert report["exit_reasons"]["Exchange stop loss"] == 1
+
+
+def test_learning_progress_uses_all_symbol_history_even_when_report_is_limited(tmp_path):
+    settings = _settings(tmp_path)
+    db = TradingDB(settings.database_path)
+    db.init()
+
+    for _ in range(3):
+        _insert_closed_trade(
+            db,
+            symbol="BTCUSDT",
+            quantity=1.0,
+            entry_price=100.0,
+            exit_price=101.0,
+            pnl=1.0,
+            pnl_pct=0.01,
+        )
+    _insert_closed_trade(
+        db,
+        symbol="ETHUSDT",
+        quantity=1.0,
+        entry_price=100.0,
+        exit_price=99.0,
+        pnl=-1.0,
+        pnl_pct=-0.01,
+    )
+
+    report = build_report(
+        settings,
+        db,
+        limit=1,
+        fee_bps=0.0,
+        slippage_bps=0.0,
+    )
+
+    assert report["closed_trades"] == 1
+    assert report["learning_progress"]["BTCUSDT"]["closed_trades"] == 3
+    assert report["learning_progress"]["BTCUSDT"]["trades_until_learning"] == 7
+    assert report["learning_progress"]["ETHUSDT"]["closed_trades"] == 1
