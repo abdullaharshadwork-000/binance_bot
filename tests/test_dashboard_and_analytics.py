@@ -5,7 +5,7 @@ from app.ui.dashboard import DASHBOARD_HTML
 def test_dashboard_has_plain_language_sections():
     assert "Focused Market Decision" in DASHBOARD_HTML
     assert "Focused Market Risk" in DASHBOARD_HTML
-    assert "Recent Trades" in DASHBOARD_HTML
+    assert "Recent Portfolio Trades" in DASHBOARD_HTML
     assert "What the Dashboard Means" in DASHBOARD_HTML
     assert "Multi-Symbol Signal Monitor" in DASHBOARD_HTML
     assert "Start All Markets" in DASHBOARD_HTML
