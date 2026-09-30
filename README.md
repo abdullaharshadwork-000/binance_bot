@@ -429,3 +429,41 @@ utility queries the same client order ID and never blindly resubmits.
 
 After cleanup, run `python check_live_readiness.py`, start the bot again, and
 verify `/status` shows unmanaged exposure below `MAX_PORTFOLIO_EXPOSURE_FRACTION`.
+
+
+## Forward Testnet performance report
+
+While the normal Testnet bot continues collecting trades, summarize the closed
+trade history with:
+
+```powershell
+python forward_test_report.py
+```
+
+The report includes raw PnL, win/loss counts, win rate, profit factor, maximum
+drawdown, per-symbol performance, exit-reason counts, and progress toward the
+adaptive-learning sample threshold.
+
+Because Binance Spot Testnet can report zero commissions, the report also shows:
+
+- a fee-adjusted scenario that adds only the shortfall needed to reach the
+  configured `TRADING_FEE_BPS` on both entry and exit notionals; and
+- a conservative stress scenario that additionally subtracts extra slippage on
+  both sides of each trade.
+
+The default extra slippage assumption is 2 bps per side. Override it without
+changing trading behavior:
+
+```powershell
+python forward_test_report.py --slippage-bps 5
+```
+
+You can also inspect only the most recent closed trades:
+
+```powershell
+python forward_test_report.py --limit 20
+```
+
+These are analytical scenarios only. They do not alter the database, strategy,
+orders, risk limits, or live-trading gates, and they do not establish
+profitability or live readiness.
