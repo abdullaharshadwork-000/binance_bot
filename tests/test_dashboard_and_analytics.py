@@ -168,7 +168,7 @@ def test_interval_refresh_math():
 
 def test_dashboard_analysis_button_is_read_only_and_frontend_marks_stale_data():
     assert "act('/bot/analyze'" in DASHBOARD_HTML
-    assert "Analyze Market" in DASHBOARD_HTML
+    assert "Analyze Focus Market" in DASHBOARD_HTML
     assert "onclick=\"act('/bot/run-once'" not in DASHBOARD_HTML
     assert "dashboard-stale" in DASHBOARD_HTML
     assert "Last Order Attempt" in DASHBOARD_HTML
