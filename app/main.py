@@ -121,10 +121,16 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
             symbol=selected_settings.symbol,
         )
 
-    performance = selected_bot.db.performance_summary(
-        mode=selected_settings.mode,
-        symbol=selected_settings.symbol,
-    )
+    if len(manager.symbols) > 1:
+        performance = selected_bot.db.performance_summary_portfolio(
+            mode=selected_settings.mode,
+            symbols=manager.symbols,
+        )
+    else:
+        performance = selected_bot.db.performance_summary(
+            mode=selected_settings.mode,
+            symbol=selected_settings.symbol,
+        )
     learning = selected_bot.learning.load().__dict__
 
     open_trade_metrics = None
