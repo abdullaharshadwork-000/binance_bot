@@ -180,10 +180,10 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
         "last_execution": selected_bot.last_execution,
         "learning": learning,
         "performance": performance,
-        "trades": selected_bot.db.list_trades(
-            20,
+        "trades": selected_bot.db.recent_portfolio_closes(
             mode=selected_settings.mode,
-            symbol=selected_settings.symbol,
+            symbols=manager.symbols,
+            limit=20,
         ),
         "symbol_overview": manager.overview(),
         "portfolio": {
