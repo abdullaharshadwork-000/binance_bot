@@ -170,14 +170,24 @@ def build_report(
             "stress_adjusted": _summary_from_pnls(buckets["stress"]),
         }
 
+    learning_progress = {}
+    for symbol in settings.trading_symbols:
+        symbol_closed = len(db.closed_trades(mode="testnet", symbol=symbol))
+        learning_progress[symbol] = {
+            "closed_trades": symbol_closed,
+            "threshold": settings.min_trades_for_learning,
+            "trades_until_learning": max(
+                0, settings.min_trades_for_learning - symbol_closed
+            ),
+            "eligible": symbol_closed >= settings.min_trades_for_learning,
+        }
+
     return {
         "mode": settings.mode,
         "symbols": settings.trading_symbols,
         "closed_trades": len(rows),
-        "learning_threshold": settings.min_trades_for_learning,
-        "trades_until_learning": max(
-            0, settings.min_trades_for_learning - len(rows)
-        ),
+        "learning_threshold_per_symbol": settings.min_trades_for_learning,
+        "learning_progress": learning_progress,
         "assumptions": {
             "fee_bps_per_side": fee_bps,
             "extra_slippage_bps_per_side": slippage_bps,
