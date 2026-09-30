@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.config import Settings
@@ -196,7 +196,7 @@ def build_report(
         "per_symbol": symbol_summary,
         "exit_reasons": dict(sorted(exit_reasons.items())),
         "trades": rows,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).isoformat(),
         "note": (
             "This report is descriptive Testnet analytics. It does not establish "
             "profitability or live-trading readiness."
