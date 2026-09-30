@@ -18,16 +18,16 @@ DASHBOARD_HTML = r'''<!doctype html>
     .mode-pill,.badge{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:7px 11px;font-weight:700;font-size:12px;border:1px solid var(--line)}
     .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
     .paper{color:var(--cyan);background:#082a35}.testnet{color:var(--amber);background:#34270a}.live{color:var(--red);background:#351214}
-    .controls{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 18px}
+    .controls{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 18px;align-items:center}.focus-control{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:10px;background:#0a1726}.focus-control label{font-size:11px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.05em}.focus-control select{background:#071522;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-weight:700;outline:none}
     button{border:0;border-radius:10px;padding:11px 16px;font-weight:800;color:white;cursor:pointer;transition:.15s}
     button:hover{transform:translateY(-1px);filter:brightness(1.06)}button:disabled{opacity:.55;cursor:wait;transform:none}
     .b-blue{background:var(--blue)}.b-green{background:#159447}.b-red{background:#c93434}.b-gray{background:#43546a}
     .notice{border:1px solid #7a5a14;background:#2b220d;color:#ffd878;border-radius:12px;padding:12px 14px;margin-bottom:18px;font-size:13px}
     .grid{display:grid;gap:14px}.stats{grid-template-columns:repeat(7,minmax(130px,1fr));margin-bottom:14px}
     .two{grid-template-columns:1.25fr .75fr;margin-bottom:14px}.three{grid-template-columns:repeat(3,1fr);margin-bottom:14px}
-    .card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.16)}
+    .card{min-width:0;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.16)}
     .metric-label{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}.metric-value{font-size:24px;font-weight:800}.metric-note{font-size:12px;color:var(--muted);margin-top:6px}
-    h2{font-size:17px;margin:0 0 13px}.row{display:flex;justify-content:space-between;gap:20px;padding:8px 0;border-bottom:1px solid rgba(70,95,126,.28);font-size:13px}.row:last-child{border-bottom:0}.key{color:var(--muted)}.val{text-align:right;font-weight:700}
+    h2{font-size:17px;margin:0 0 13px}.row{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:8px 0;border-bottom:1px solid rgba(70,95,126,.28);font-size:13px}.row:last-child{border-bottom:0}.key{color:var(--muted);flex:0 0 42%}.val{text-align:right;font-weight:700;min-width:0;overflow-wrap:anywhere}
     .green{color:#66e18e}.red{color:#ff7979}.amber{color:#ffcc66}.blue{color:#7bb1ff}.muted{color:var(--muted)}
     .signal{font-size:25px;font-weight:900}.badge-green{color:#66e18e;background:#0c3020}.badge-red{color:#ff7979;background:#361719}.badge-amber{color:#ffcc66;background:#34270a}.badge-blue{color:#79c8ff;background:#0b2a3d}
     .progress{height:8px;background:#06101d;border-radius:999px;overflow:hidden;margin-top:8px}.progress>div{height:100%;background:var(--blue);border-radius:999px}
@@ -35,14 +35,14 @@ DASHBOARD_HTML = r'''<!doctype html>
     .chart-wrap{height:210px;position:relative}.chart-empty{height:100%;display:grid;place-items:center;color:var(--muted);font-size:13px}canvas{width:100%;height:100%}
     .market-card{margin-bottom:14px}.market-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px}.market-title-note{color:var(--muted);font-size:12px;margin-top:4px}.chart-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chart-controls label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.chart-controls select{background:#071522;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-weight:700;outline:none}.chart-controls select:focus{border-color:var(--blue)}
     .candle-wrap{height:430px;position:relative;border:1px solid #1b314a;border-radius:12px;background:#071421;overflow:hidden}.candle-wrap canvas{display:block;width:100%;height:100%}.candle-tooltip{position:absolute;display:none;pointer-events:none;z-index:3;top:10px;left:10px;padding:9px 11px;border-radius:9px;background:rgba(5,13,24,.94);border:1px solid #29425f;font-size:11px;line-height:1.55;color:#dbe7f6;min-width:190px}.candle-tooltip b{color:white}.chart-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;color:var(--muted);font-size:11px}.legend-item{display:inline-flex;align-items:center;gap:6px}.legend-line{width:18px;height:3px;border-radius:2px;background:#7bb1ff}.legend-line.slow{background:#f59e0b}.legend-line.entry{background:#7bb1ff}.legend-line.stop{background:#ef4444}.legend-line.take{background:#22c55e}.legend-candle{width:9px;height:9px;border-radius:2px;background:#22c55e}.chart-status{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px}.chart-status span{font-size:11px;color:var(--muted)}
-    .table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:10px 9px;border-bottom:1px solid rgba(70,95,126,.25);white-space:nowrap}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase}tr:hover td{background:rgba(255,255,255,.018)}
+    .table-wrap{overflow-x:auto;overflow-y:hidden;scrollbar-gutter:stable}table{width:100%;min-width:760px;border-collapse:collapse;font-size:12px}th,td{padding:10px 9px;border-bottom:1px solid rgba(70,95,126,.25);white-space:nowrap;vertical-align:top}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;position:sticky;top:0;background:var(--panel);z-index:1}tr:hover td{background:rgba(255,255,255,.018)}td.reason-cell{min-width:260px;max-width:440px;white-space:normal;line-height:1.4;overflow-wrap:anywhere}
     .footer{color:var(--muted);font-size:12px;text-align:right;padding:6px 2px 0}.loading{opacity:.72}
     .dashboard-stale .stats,.dashboard-stale .market-card,.dashboard-stale .two,.dashboard-stale .three{opacity:.62}
     .forming-note{color:var(--amber);font-weight:700}
     .help-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.help{padding:10px;border-radius:10px;background:#091725;border:1px solid #1c334c}.help b{display:block;margin-bottom:5px;font-size:12px}.help span{font-size:12px;color:var(--muted);line-height:1.45}
     details{margin-top:10px}summary{cursor:pointer;color:#7bb1ff;font-size:12px;font-weight:700}pre{white-space:pre-wrap;word-break:break-word;background:#06101d;border:1px solid var(--line);padding:12px;border-radius:10px;color:#b9c9db;max-height:330px;overflow:auto;font-size:11px}
     @media(max-width:1080px){.stats{grid-template-columns:repeat(3,1fr)}.two,.three{grid-template-columns:1fr}}
-    @media(max-width:650px){.wrap{padding:15px}.stats{grid-template-columns:repeat(2,1fr)}.help-grid{grid-template-columns:1fr}.metric-value{font-size:20px}}
+    @media(max-width:650px){.wrap{padding:15px}.stats{grid-template-columns:repeat(2,1fr)}.help-grid{grid-template-columns:1fr}.metric-value{font-size:20px}.controls{align-items:stretch}.focus-control{width:100%;justify-content:space-between}.focus-control select{flex:1}}@media(max-width:460px){.stats{grid-template-columns:1fr}.controls button{flex:1 1 calc(50% - 6px)}.row{gap:12px}.key{flex-basis:46%}}
   </style>
 </head>
 <body>
@@ -55,7 +55,8 @@ DASHBOARD_HTML = r'''<!doctype html>
   <div id="liveNotice" class="notice" style="display:none"></div>
 
   <div class="controls">
-    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/analyze','Running read-only market analysis…')">▶ Analyze Market</button>
+    <div class="focus-control"><label for="focusSymbol">Focus market</label><select id="focusSymbol" aria-label="Focused market"></select></div>
+    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/analyze','Running read-only market analysis…')">▶ Analyze Focus Market</button>
     <button id="startBtn" class="b-green action" onclick="act('/bot/start','Starting all configured markets…')">● Start All Markets</button>
     <button id="stopBtn" class="b-red action" onclick="act('/bot/stop','Stopping all configured markets…')">■ Stop All Markets</button>
     <button class="b-gray action" onclick="loadAll(true)">↻ Refresh</button>
@@ -120,28 +121,28 @@ DASHBOARD_HTML = r'''<!doctype html>
 
   <div class="grid two">
     <div class="card">
-      <h2>Current Decision</h2>
-      <div id="decision"><span class="muted">Click Run Once or Start Bot to generate a decision.</span></div>
+      <h2>Focused Market Decision <span class="muted" id="decisionSymbol"></span></h2>
+      <div id="decision"><span class="muted">Analyze the focused market or start the bot to generate a decision.</span></div>
     </div>
     <div class="card">
-      <h2>Open Position</h2>
+      <h2>Focused Market Position <span class="muted" id="positionSymbol"></span></h2>
       <div id="position"><span class="muted">No open position.</span></div>
     </div>
   </div>
 
   <div class="grid three">
-    <div class="card"><h2>Risk Engine</h2><div id="risk">No decision yet.</div></div>
-    <div class="card"><h2>Last Order Attempt</h2><div id="execution">No BUY/SELL attempt yet.</div></div>
-    <div class="card"><h2>Adaptive Learning</h2><div id="learning">Loading…</div></div>
+    <div class="card"><h2>Focused Market Risk <span class="muted" id="riskSymbol"></span></h2><div id="risk">No decision yet.</div></div>
+    <div class="card"><h2>Focused Market Order <span class="muted" id="executionSymbol"></span></h2><div id="execution">No BUY/SELL attempt yet.</div></div>
+    <div class="card"><h2>Focused Market Learning <span class="muted" id="learningSymbol"></span></h2><div id="learning">Loading…</div></div>
   </div>
 
   <div class="grid two">
-    <div class="card"><h2>Realized P/L Curve</h2><div class="chart-wrap" id="chartBox"><canvas id="pnlChart"></canvas></div><div class="explain">This chart uses closed trades only. A rising line means cumulative realized profit is increasing; a falling line means realized losses.</div></div>
-    <div class="card"><h2>Performance Summary</h2><div id="performance">Loading…</div></div>
+    <div class="card"><h2>Portfolio Realized P/L Curve</h2><div class="chart-wrap" id="chartBox"><canvas id="pnlChart"></canvas></div><div class="explain">This chart uses closed trades across all configured markets. A rising line means cumulative realized profit is increasing; a falling line means realized losses.</div></div>
+    <div class="card"><h2>Portfolio Performance Summary</h2><div id="performance">Loading…</div></div>
   </div>
 
   <div class="card" style="margin-bottom:14px">
-    <h2>Recent Trades</h2>
+    <h2>Recent Portfolio Trades</h2>
     <div class="table-wrap" id="trades"><span class="muted">No trades yet.</span></div>
   </div>
 
@@ -170,6 +171,8 @@ DASHBOARD_HTML = r'''<!doctype html>
 <script>
 const $ = id => document.getElementById(id);
 let baseAsset='BASE', quoteAsset='QUOTE';
+let focusSymbol=null;
+let focusInitialized=false;
 const money = v => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':quoteAsset+' '+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const num = (v,d=4) => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':Number(v).toFixed(d);
 const pct = (v,d=2) => (v===null||v===undefined||Number.isNaN(Number(v)))?'—':(Number(v)*100).toFixed(d)+'%';
@@ -180,7 +183,7 @@ function sideBadge(side){ side=String(side||'HOLD').toUpperCase(); return badge(
 function row(k,v){return `<div class="row"><span class="key">${k}</span><span class="val">${v}</span></div>`}
 function syncActionButtons(){
   if(!latestDashboard)return;
-  const running=Boolean(latestDashboard.running);
+  const running=Boolean(latestDashboard.portfolio_running ?? latestDashboard.running);
   if($('analyzeBtn')){$('analyzeBtn').disabled=running;$('analyzeBtn').title=running?'Stop the automated bot before running read-only analysis':'Read-only analysis; this button never submits an order'}
   if($('startBtn'))$('startBtn').disabled=running;
   if($('stopBtn'))$('stopBtn').disabled=!running;
@@ -227,7 +230,8 @@ async function loadCandles(force=false){
   try{
     const interval=$('candleInterval')?.value || latestDashboard?.config?.interval || '15m';
     const limit=Number($('candleCount')?.value||120);
-    const r=await fetch(`/market/candles?interval=${encodeURIComponent(interval)}&limit=${limit}`,{signal:controller.signal});
+    const symbolParam=focusSymbol?`&symbol=${encodeURIComponent(focusSymbol)}`:'';
+    const r=await fetch(`/market/candles?interval=${encodeURIComponent(interval)}&limit=${limit}${symbolParam}`,{signal:controller.signal});
     const j=await r.json(); if(!r.ok)throw new Error(j.detail||'Could not load candles');
     if(requestSeq!==candleRequestSeq)return;
     candleData=j.candles||[]; candleMeta=j;
@@ -288,6 +292,7 @@ function showCandleTooltip(ev){
 }
 
 async function act(url,msg){
+  if(url==='/bot/analyze'&&focusSymbol)url+=`?symbol=${encodeURIComponent(focusSymbol)}`;
   if(url==='/bot/start'&&latestDashboard?.config?.mode==='live'&&latestDashboard?.config?.live_orders_allowed){
     const ok=confirm('LIVE ORDERS ARE ENABLED. Starting the bot can use real funds. Continue?');
     if(!ok)return;
@@ -304,7 +309,7 @@ function renderSymbolOverview(items,portfolio){
     $('symbolOverview').innerHTML='<span class="muted">No configured markets.</span>';
     return;
   }
-  $('portfolioStatus').textContent=`Bot open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${num(portfolio?.available_quote,2)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
+  $('portfolioStatus').textContent=`Bot open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${money(portfolio?.available_quote)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
   $('portfolioEntryBlock').textContent=rows.every(item=>!item.running)?'Trading engines are stopped. Click Start All Markets to enable strategy cycles in the displayed mode. Starting the server alone does not start trading.':portfolio?.entry_block_reason||'Exposure headroom: '+money(portfolio?.exposure_headroom)+'. A valid BUY setup and all other risk checks are still required.';
   const holdings=Array.isArray(portfolio?.holdings)?portfolio.holdings:[];
   $('portfolioHoldings').textContent=portfolio?.equity==null
@@ -368,8 +373,8 @@ function renderPerformance(p){
 }
 
 function renderTrades(ts){
-  if(!ts?.length){$('trades').innerHTML='<span class="muted">No trades have been recorded yet.</span>';return}
-  const rows=ts.map(t=>`<tr><td>#${t.id}</td><td>${esc(t.symbol)}</td><td>${t.status==='OPEN'?badge('OPEN','blue'):badge('CLOSED','green')}</td><td>${num(t.quantity,8)}</td><td>${money(t.entry_price)}</td><td>${money(t.exit_price)}</td><td class="${cls(t.pnl)}">${money(t.pnl)}</td><td class="${cls(t.pnl_pct)}">${pct(t.pnl_pct)}</td><td>${esc(t.exit_reason||t.entry_reason)}</td></tr>`).join('');
+  if(!ts?.length){$('trades').innerHTML='<span class="muted">No closed portfolio trades have been recorded yet.</span>';return}
+  const rows=ts.map(t=>`<tr><td>#${t.id}</td><td>${esc(t.symbol)}</td><td>${badge('CLOSED','green')}</td><td>${num(t.quantity,8)}</td><td>${money(t.entry_price)}</td><td>${money(t.exit_price)}</td><td class="${cls(t.pnl)}">${money(t.pnl)}</td><td class="${cls(t.pnl_pct)}">${pct(t.pnl_pct)}</td><td class="reason-cell">${esc(t.exit_reason||t.entry_reason)}</td></tr>`).join('');
   $('trades').innerHTML=`<table><thead><tr><th>ID</th><th>Pair</th><th>Status</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P/L</th><th>Return</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -395,13 +400,32 @@ async function loadAll(showLoading=false,force=false){
   dashboardLoading=true;
   if(showLoading)setLoading(true);
   try{
-    const r=await fetch('/dashboard-data',{signal:controller.signal});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Dashboard request failed');
+    const symbolParam=focusSymbol?`?symbol=${encodeURIComponent(focusSymbol)}`:'';
+    const r=await fetch('/dashboard-data'+symbolParam,{signal:controller.signal});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Dashboard request failed');
     if(requestSeq!==dashboardRequestSeq)return;
     latestDashboard=d;
     lastDashboardSuccessAt=Date.now();
     document.body.classList.remove('dashboard-stale');
     baseAsset=d.config.base_asset||'BASE';
     quoteAsset=d.config.quote_asset||'QUOTE';
+    if(!focusInitialized){
+      const active=(d.symbol_overview||[]).find(item=>item.open_position);
+      focusSymbol=active?.symbol||d.config.symbol;
+      focusInitialized=true;
+      if(focusSymbol!==d.config.symbol){
+        dashboardLoading=false;
+        if(dashboardController===controller)dashboardController=null;
+        return loadAll(showLoading,true);
+      }
+    }else{
+      focusSymbol=d.config.symbol;
+    }
+    const focusSelect=$('focusSymbol');
+    const symbols=d.config.symbols||[d.config.symbol];
+    const existing=Array.from(focusSelect.options).map(o=>o.value).join('|');
+    if(existing!==symbols.join('|'))focusSelect.innerHTML=symbols.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    focusSelect.value=focusSymbol;
+    ['decisionSymbol','positionSymbol','riskSymbol','executionSymbol','learningSymbol'].forEach(id=>{if($(id))$(id).textContent='· '+focusSymbol});
     $('priceLabel').textContent=baseAsset+' price';
     $('equityNote').textContent='Estimated current value in '+quoteAsset;
     drawCandles();
@@ -410,12 +434,12 @@ async function loadAll(showLoading=false,force=false){
     else if(d.market_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Market/account data warning: '+d.market_error}
     else if(mode==='live'){$('liveNotice').style.display='block';$('liveNotice').textContent=d.config.live_orders_allowed?'LIVE ORDERS ARE ENABLED. Real funds can be used.':'Live mode selected, but real orders are blocked because ALLOW_LIVE_TRADING=false.'}
     else $('liveNotice').style.display='none';
-    $('running').innerHTML=d.running?'<span class="green">RUNNING</span>':'<span class="red">STOPPED</span>';
+    $('running').innerHTML=d.portfolio_running?'<span class="green">RUNNING</span>':'<span class="red">STOPPED</span>';
     syncActionButtons();
     $('cycleNote').textContent=`Risk check every ${d.config.cycle_seconds}s · strategy on closed ${d.config.interval} candles`;
     $('price').textContent=money(d.price);$('symbol').textContent=`${d.config.symbol} · ${d.market_monitor?.source||'waiting'}`;$('equity').textContent=money(d.equity);
     const mm=d.market_monitor||{};
-    if(!d.running){$('feedStatus').innerHTML='<span class="amber">STOPPED</span>';$('feedAge').textContent='Start Bot to open the live price stream'}
+    if(!d.running){$('feedStatus').innerHTML='<span class="amber">STOPPED</span>';$('feedAge').textContent='Focused market engine is stopped'}
     else if(mm.websocket_connected){$('feedStatus').innerHTML='<span class="green">LIVE</span>';$('feedAge').textContent=`WebSocket · price age ${Math.round(mm.price_age_ms||0)} ms`}
     else{$('feedStatus').innerHTML='<span class="amber">FALLBACK</span>';$('feedAge').textContent=`${mm.source||'REST'} · WebSocket not fresh`}
     $('dailyPnl').innerHTML=`<span class="${cls(d.daily_realized_pnl)}">${money(d.daily_realized_pnl)}</span>`;$('dailyLimit').textContent=`Daily stop: ${money(d.daily_loss_limit_amount)} loss`;
@@ -438,6 +462,7 @@ async function loadAll(showLoading=false,force=false){
     }
   }
 }
+$('focusSymbol').addEventListener('change',()=>{focusSymbol=$('focusSymbol').value;loadAll(true,true).then(()=>loadCandles(true));});
 $('candleInterval').addEventListener('change',()=>loadCandles(true));
 $('candleCount').addEventListener('change',()=>loadCandles(true));
 $('chartRefresh').addEventListener('click',()=>loadCandles(true));
