@@ -67,9 +67,9 @@ DASHBOARD_HTML = r'''<!doctype html>
     <div class="card"><div class="metric-label" id="priceLabel">Asset price</div><div class="metric-value" id="price">—</div><div class="metric-note" id="symbol">—</div></div>
     <div class="card"><div class="metric-label">Account equity</div><div class="metric-value" id="equity">—</div><div class="metric-note" id="equityNote">Estimated current value</div></div>
     <div class="card"><div class="metric-label">Portfolio daily realized P/L</div><div class="metric-value" id="dailyPnl">—</div><div class="metric-note" id="dailyLimit">—</div></div>
-    <div class="card"><div class="metric-label">Win rate</div><div class="metric-value" id="winRate">—</div><div class="metric-note" id="tradeCount">No closed trades</div></div>
-    <div class="card"><div class="metric-label">Total realized P/L</div><div class="metric-value" id="totalPnl">—</div><div class="metric-note" id="profitFactor">Profit factor —</div></div>
-    <div class="card"><div class="metric-label">Market feed</div><div class="metric-value" id="feedStatus">—</div><div class="metric-note" id="feedAge">Waiting for price stream</div></div>
+    <div class="card"><div class="metric-label">Portfolio win rate</div><div class="metric-value" id="winRate">—</div><div class="metric-note" id="tradeCount">No closed trades</div></div>
+    <div class="card"><div class="metric-label">Portfolio total realized P/L</div><div class="metric-value" id="totalPnl">—</div><div class="metric-note" id="profitFactor">Profit factor —</div></div>
+    <div class="card"><div class="metric-label">Focus market feed</div><div class="metric-value" id="feedStatus">—</div><div class="metric-note" id="feedAge">Waiting for price stream</div></div>
   </div>
 
   <div class="card" style="margin-bottom:14px">
