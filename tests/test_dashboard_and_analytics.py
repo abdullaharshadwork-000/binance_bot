@@ -9,6 +9,9 @@ def test_dashboard_has_plain_language_sections():
     assert "What the Dashboard Means" in DASHBOARD_HTML
     assert "Multi-Symbol Signal Monitor" in DASHBOARD_HTML
     assert "Start All Markets" in DASHBOARD_HTML
+    assert "Focus market" in DASHBOARD_HTML
+    assert "Recent Portfolio Trades" in DASHBOARD_HTML
+    assert "Portfolio Performance Summary" in DASHBOARD_HTML
 
 
 def test_performance_summary_is_scoped_by_mode_and_symbol(tmp_path):
@@ -60,6 +63,62 @@ def test_performance_summary_is_scoped_by_mode_and_symbol(tmp_path):
     assert db.get_open_trade("BTCUSDT", "paper") is None
     assert db.get_open_trade("BTCUSDT", "live")["id"] == live
 
+
+
+def test_portfolio_performance_summary_combines_configured_symbols(tmp_path):
+    db = TradingDB(str(tmp_path / "bot.db"))
+    db.init()
+
+    btc = db.open_trade(
+        mode="testnet",
+        symbol="BTCUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="btc",
+        stop_price=95,
+        take_profit_price=110,
+    )
+    db.close_trade(btc, 110, 0, "btc win")
+
+    sol = db.open_trade(
+        mode="testnet",
+        symbol="SOLUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="sol",
+        stop_price=95,
+        take_profit_price=110,
+    )
+    db.close_trade(sol, 90, 0, "sol loss")
+
+    ignored = db.open_trade(
+        mode="testnet",
+        symbol="XRPUSDT",
+        quantity=1,
+        entry_price=100,
+        entry_fee=0,
+        reason="ignored",
+        stop_price=95,
+        take_profit_price=110,
+    )
+    db.close_trade(ignored, 150, 0, "not configured")
+
+    summary = db.performance_summary_portfolio(
+        mode="testnet",
+        symbols=["BTCUSDT", "SOLUSDT"],
+    )
+
+    assert summary["closed_trades"] == 2
+    assert summary["wins"] == 1
+    assert summary["losses"] == 1
+    assert summary["total_pnl"] == 0
+    assert len(summary["equity_curve"]) == 2
+    assert {point["symbol"] for point in summary["equity_curve"]} == {
+        "BTCUSDT",
+        "SOLUSDT",
+    }
 
 def test_partial_close_keeps_remaining_position(tmp_path):
     db = TradingDB(str(tmp_path / "bot.db"))
