@@ -210,3 +210,13 @@ def test_candlestick_chart_has_zoom_pan_and_fit_controls():
 def test_candlestick_chart_supports_300_loaded_candles_and_readable_bodies():
     assert '<option value="300">300</option>' in DASHBOARD_HTML
     assert "Math.max(3,Math.min(18,step*.72))" in DASHBOARD_HTML
+
+
+def test_candlestick_autoscale_does_not_include_distant_stop_take_levels():
+    assert "const scaleValues=[" in DASHBOARD_HTML
+    assert "Number(pos.stop_price)" not in DASHBOARD_HTML.split("const scaleValues=[",1)[1].split("].filter(Number.isFinite);",1)[0]
+    assert "Number(pos.take_profit_price)" not in DASHBOARD_HTML.split("const scaleValues=[",1)[1].split("].filter(Number.isFinite);",1)[0]
+    assert "function drawTradeLevel(" in DASHBOARD_HTML
+    assert "TAKE" in DASHBOARD_HTML
+    assert "STOP" in DASHBOARD_HTML
+    assert "above?'↑':'↓'" in DASHBOARD_HTML
