@@ -353,7 +353,24 @@ function renderRisk(cycle){
 function renderExecution(e){
   if(!e){$('execution').innerHTML='<span class="muted">No BUY/SELL attempt has been recorded in this process.</span>';return}
   const action=String(e.action||'NONE').toUpperCase();
-  $('execution').innerHTML=`${row('Action',sideBadge(action))}${row('Result',e.success?badge('SUCCESS','green'):e.details?.order_submitted===false?badge('BLOCKED','amber'):badge('FAILED','red'))}${row('Time',e.timestamp?new Date(e.timestamp).toLocaleString():'—')}${row('Message',esc(e.message))}${e.details?row('Details',esc(JSON.stringify(e.details))):''}`;
+  const d=e.details||{};
+  const order=d.order||{};
+  const protection=d.protection||{};
+  const detailRows=[
+    d.trade_id!=null?row('Trade ID','#'+esc(d.trade_id)):null,
+    d.client_order_id?row('Client order ID',esc(d.client_order_id)):null,
+    d.requested_qty!=null?row('Requested quantity',num(d.requested_qty,8)):null,
+    d.executed_qty!=null?row('Executed quantity',num(d.executed_qty,8)):null,
+    d.recorded_position_qty!=null?row('Position quantity',num(d.recorded_position_qty,8)):null,
+    d.fill_price!=null?row('Fill price',money(d.fill_price)):null,
+    d.entry_fee_quote!=null?row('Entry fee',money(d.entry_fee_quote)):null,
+    order.orderId!=null?row('Binance order ID',esc(order.orderId)):null,
+    order.status?row('Order status',badge(esc(order.status),order.status==='FILLED'?'green':'blue')):null,
+    protection.status?row('Protection status',badge(esc(protection.status),protection.status==='EXECUTING'?'green':'blue')):null,
+    protection.order_list_id!=null?row('Protection list ID',esc(protection.order_list_id)):null,
+    protection.list_client_order_id?row('Protection client ID',esc(protection.list_client_order_id)):null,
+  ].filter(Boolean).join('');
+  $('execution').innerHTML=`${row('Action',sideBadge(action))}${row('Result',e.success?badge('SUCCESS','green'):d.order_submitted===false?badge('BLOCKED','amber'):badge('FAILED','red'))}${row('Time',e.timestamp?new Date(e.timestamp).toLocaleString():'—')}${row('Message',esc(e.message))}${detailRows}`;
 }
 
 function renderPosition(d){
