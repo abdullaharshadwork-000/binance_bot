@@ -190,3 +190,23 @@ def test_dashboard_formats_execution_details_as_rows_instead_of_raw_json():
     assert "Position quantity" in DASHBOARD_HTML
     assert "Fill price" in DASHBOARD_HTML
     assert "Protection status" in DASHBOARD_HTML
+
+
+def test_candlestick_chart_has_zoom_pan_and_fit_controls():
+    assert 'id="chartZoomIn"' in DASHBOARD_HTML
+    assert 'id="chartZoomOut"' in DASHBOARD_HTML
+    assert 'id="chartBack"' in DASHBOARD_HTML
+    assert 'id="chartForward"' in DASHBOARD_HTML
+    assert 'id="chartLatest"' in DASHBOARD_HTML
+    assert 'id="chartAll"' in DASHBOARD_HTML
+    assert 'id="chartWindow"' in DASHBOARD_HTML
+    assert "function candleViewport()" in DASHBOARD_HTML
+    assert "function setChartViewCount(" in DASHBOARD_HTML
+    assert "function panChart(" in DASHBOARD_HTML
+    assert "addEventListener('wheel'" in DASHBOARD_HTML
+    assert "addEventListener('pointerdown'" in DASHBOARD_HTML
+
+
+def test_candlestick_chart_supports_300_loaded_candles_and_readable_bodies():
+    assert '<option value="300">300</option>' in DASHBOARD_HTML
+    assert "Math.max(3,Math.min(18,step*.72))" in DASHBOARD_HTML

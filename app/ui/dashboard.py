@@ -33,8 +33,8 @@ DASHBOARD_HTML = r'''<!doctype html>
     .progress{height:8px;background:#06101d;border-radius:999px;overflow:hidden;margin-top:8px}.progress>div{height:100%;background:var(--blue);border-radius:999px}
     .explain{margin-top:10px;padding:10px 12px;border-radius:10px;background:#091725;border:1px solid #1c334c;color:#b8c7da;font-size:12px;line-height:1.45}
     .chart-wrap{height:210px;position:relative}.chart-empty{height:100%;display:grid;place-items:center;color:var(--muted);font-size:13px}canvas{width:100%;height:100%}
-    .market-card{margin-bottom:14px}.market-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px}.market-title-note{color:var(--muted);font-size:12px;margin-top:4px}.chart-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chart-controls label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.chart-controls select{background:#071522;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-weight:700;outline:none}.chart-controls select:focus{border-color:var(--blue)}
-    .candle-wrap{height:430px;position:relative;border:1px solid #1b314a;border-radius:12px;background:#071421;overflow:hidden}.candle-wrap canvas{display:block;width:100%;height:100%}.candle-tooltip{position:absolute;display:none;pointer-events:none;z-index:3;top:10px;left:10px;padding:9px 11px;border-radius:9px;background:rgba(5,13,24,.94);border:1px solid #29425f;font-size:11px;line-height:1.55;color:#dbe7f6;min-width:190px}.candle-tooltip b{color:white}.chart-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;color:var(--muted);font-size:11px}.legend-item{display:inline-flex;align-items:center;gap:6px}.legend-line{width:18px;height:3px;border-radius:2px;background:#7bb1ff}.legend-line.slow{background:#f59e0b}.legend-line.entry{background:#7bb1ff}.legend-line.stop{background:#ef4444}.legend-line.take{background:#22c55e}.legend-candle{width:9px;height:9px;border-radius:2px;background:#22c55e}.chart-status{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px}.chart-status span{font-size:11px;color:var(--muted)}
+    .market-card{margin-bottom:14px}.market-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px}.market-title-note{color:var(--muted);font-size:12px;margin-top:4px}.chart-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chart-controls label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.chart-controls select{background:#071522;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-weight:700;outline:none}.chart-controls select:focus{border-color:var(--blue)}.chart-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.chart-nav button{padding:8px 10px;min-width:38px}.chart-window{font-size:11px;color:var(--muted);font-weight:700;min-width:118px;text-align:center}
+    .candle-wrap{height:430px;position:relative;border:1px solid #1b314a;border-radius:12px;background:#071421;overflow:hidden;cursor:crosshair;touch-action:none}.candle-wrap.dragging{cursor:grabbing}.candle-wrap canvas{display:block;width:100%;height:100%}.candle-tooltip{position:absolute;display:none;pointer-events:none;z-index:3;top:10px;left:10px;padding:9px 11px;border-radius:9px;background:rgba(5,13,24,.94);border:1px solid #29425f;font-size:11px;line-height:1.55;color:#dbe7f6;min-width:190px}.candle-tooltip b{color:white}.chart-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;color:var(--muted);font-size:11px}.legend-item{display:inline-flex;align-items:center;gap:6px}.legend-line{width:18px;height:3px;border-radius:2px;background:#7bb1ff}.legend-line.slow{background:#f59e0b}.legend-line.entry{background:#7bb1ff}.legend-line.stop{background:#ef4444}.legend-line.take{background:#22c55e}.legend-candle{width:9px;height:9px;border-radius:2px;background:#22c55e}.chart-status{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px}.chart-status span{font-size:11px;color:var(--muted)}
     .table-wrap{overflow-x:auto;overflow-y:hidden;scrollbar-gutter:stable}table{width:100%;min-width:760px;border-collapse:collapse;font-size:12px}th,td{padding:10px 9px;border-bottom:1px solid rgba(70,95,126,.25);white-space:nowrap;vertical-align:top}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;position:sticky;top:0;background:var(--panel);z-index:1}tr:hover td{background:rgba(255,255,255,.018)}td.reason-cell{min-width:260px;max-width:440px;white-space:normal;line-height:1.4;overflow-wrap:anywhere}
     .footer{color:var(--muted);font-size:12px;text-align:right;padding:6px 2px 0}.loading{opacity:.72}
     .dashboard-stale .stats,.dashboard-stale .market-card,.dashboard-stale .two,.dashboard-stale .three{opacity:.62}
@@ -99,8 +99,17 @@ DASHBOARD_HTML = r'''<!doctype html>
         </select>
         <label for="candleCount">Candles</label>
         <select id="candleCount" aria-label="Number of candles">
-          <option value="60">60</option><option value="120" selected>120</option><option value="200">200</option>
+          <option value="60">60</option><option value="120" selected>120</option><option value="200">200</option><option value="300">300</option>
         </select>
+        <div class="chart-nav" aria-label="Chart navigation controls">
+          <button class="b-gray" type="button" id="chartBack" title="Move to older candles">←</button>
+          <button class="b-gray" type="button" id="chartForward" title="Move to newer candles">→</button>
+          <button class="b-gray" type="button" id="chartZoomIn" title="Zoom in">＋</button>
+          <button class="b-gray" type="button" id="chartZoomOut" title="Zoom out">−</button>
+          <button class="b-gray" type="button" id="chartLatest" title="Jump to the latest candles">Latest</button>
+          <button class="b-gray" type="button" id="chartAll" title="Fit all loaded candles">All</button>
+          <span class="chart-window" id="chartWindow">—</span>
+        </div>
         <button class="b-gray" type="button" id="chartRefresh">↻ Chart</button>
       </div>
     </div>
@@ -206,6 +215,11 @@ let candleData=[];
 let candleMeta={};
 let latestDashboard=null;
 let candleHoverIndex=null;
+let candleViewCount=60;
+let candleViewEnd=0;
+let candleFollowLatest=true;
+let candleDragStartX=null;
+let candleDragStartEnd=null;
 let candleLoading=false;
 let dashboardLoading=false;
 let dashboardRequestSeq=0;
@@ -235,6 +249,11 @@ async function loadCandles(force=false){
     const j=await r.json(); if(!r.ok)throw new Error(j.detail||'Could not load candles');
     if(requestSeq!==candleRequestSeq)return;
     candleData=j.candles||[]; candleMeta=j;
+    const requested=Number($('candleCount')?.value||120);
+    if(!Number.isFinite(candleViewCount)||candleViewCount<20)candleViewCount=Math.min(60,requested);
+    candleViewCount=Math.min(Math.max(20,candleViewCount),Math.max(20,candleData.length));
+    if(candleFollowLatest||!candleViewEnd)candleViewEnd=candleData.length;
+    candleViewEnd=Math.max(candleViewCount,Math.min(candleData.length,candleViewEnd));
     $('candleSource').textContent=`${j.market_source} · ${j.symbol} · ${j.interval}`;
     $('candleUpdated').textContent='Candles updated '+new Date().toLocaleTimeString();
     drawCandles();
@@ -253,42 +272,84 @@ function drawPriceLine(ctx,y,x0,x1,color,label,value,dash=[5,4]){
   ctx.font='10px Segoe UI';const text=`${label} ${chartPrice(value)}`;const tw=ctx.measureText(text).width+10;ctx.fillStyle='#07111f';ctx.fillRect(Math.max(x0,x1-tw),Math.max(1,y-9),tw,17);ctx.fillStyle=color;ctx.fillText(text,Math.max(x0+3,x1-tw+5),y+4);ctx.restore();
 }
 
+function candleViewport(){
+  const total=candleData.length;
+  if(!total)return {data:[],start:0,end:0};
+  const count=Math.max(20,Math.min(total,Math.round(candleViewCount||60)));
+  const end=Math.max(count,Math.min(total,Math.round(candleViewEnd||total)));
+  const start=Math.max(0,end-count);
+  return {data:candleData.slice(start,end),start,end};
+}
+
+function updateChartWindowLabel(view){
+  const el=$('chartWindow'); if(!el)return;
+  if(!candleData.length){el.textContent='—';return}
+  el.textContent=`${view.start+1}–${view.end} / ${candleData.length}`;
+}
+
+function setChartViewCount(nextCount,anchorRatio=.5){
+  if(!candleData.length)return;
+  const current=candleViewport();
+  const minCount=Math.min(20,candleData.length);
+  const maxCount=candleData.length;
+  const next=Math.max(minCount,Math.min(maxCount,Math.round(nextCount)));
+  const anchorIndex=current.start+Math.max(0,Math.min(1,anchorRatio))*Math.max(0,current.data.length-1);
+  let nextStart=Math.round(anchorIndex-Math.max(0,next-1)*Math.max(0,Math.min(1,anchorRatio)));
+  nextStart=Math.max(0,Math.min(candleData.length-next,nextStart));
+  candleViewCount=next;
+  candleViewEnd=nextStart+next;
+  candleFollowLatest=candleViewEnd>=candleData.length;
+  candleHoverIndex=null;
+  $('candleTooltip').style.display='none';
+  drawCandles();
+}
+
+function panChart(deltaCandles){
+  if(!candleData.length)return;
+  const view=candleViewport();
+  const nextEnd=Math.max(view.data.length,Math.min(candleData.length,view.end+Math.round(deltaCandles)));
+  candleViewEnd=nextEnd;
+  candleFollowLatest=nextEnd>=candleData.length;
+  candleHoverIndex=null;
+  $('candleTooltip').style.display='none';
+  drawCandles();
+}
+
 function drawCandles(){
   const canvas=$('candleChart'), wrap=$('candleWrap'); if(!canvas||!wrap||!candleData.length)return;
+  const view=candleViewport(), data=view.data; if(!data.length)return;
+  updateChartWindowLabel(view);
   const rect=wrap.getBoundingClientRect(), dpr=window.devicePixelRatio||1; if(rect.width<50||rect.height<100)return;
   canvas.width=Math.floor(rect.width*dpr);canvas.height=Math.floor(rect.height*dpr);canvas.style.width=rect.width+'px';canvas.style.height=rect.height+'px';
   const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);const w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);
   const left=12,right=82,top=16,bottom=24,volumeH=72,gap=12; const priceBottom=h-bottom-volumeH-gap;
-  const e20=candleData.map(c=>Number.isFinite(Number(c.ema_fast))?Number(c.ema_fast):null);
-  const e50=candleData.map(c=>Number.isFinite(Number(c.ema_slow))?Number(c.ema_slow):null);
+  const e20=data.map(c=>Number.isFinite(Number(c.ema_fast))?Number(c.ema_fast):null);
+  const e50=data.map(c=>Number.isFinite(Number(c.ema_slow))?Number(c.ema_slow):null);
   const overlay=[];const pos=latestDashboard?.open_trade;if(pos){overlay.push(Number(pos.entry_price),Number(pos.stop_price),Number(pos.take_profit_price))} if(latestDashboard?.price)overlay.push(Number(latestDashboard.price));
-  let lo=Math.min(...candleData.map(c=>Number(c.low)),...overlay.filter(Number.isFinite)),hi=Math.max(...candleData.map(c=>Number(c.high)),...overlay.filter(Number.isFinite)); const span=Math.max(1e-9,hi-lo);lo-=span*.04;hi+=span*.04;
-  const plotW=w-left-right, n=candleData.length, step=plotW/Math.max(1,n), bodyW=Math.max(1,Math.min(10,step*.62)); const X=i=>left+step*(i+.5),Y=v=>top+(hi-v)/(hi-lo)*(priceBottom-top);
-  // background grid and price scale
+  let lo=Math.min(...data.map(c=>Number(c.low)),...overlay.filter(Number.isFinite)),hi=Math.max(...data.map(c=>Number(c.high)),...overlay.filter(Number.isFinite)); const span=Math.max(1e-9,hi-lo);lo-=span*.04;hi+=span*.04;
+  const plotW=w-left-right, n=data.length, step=plotW/Math.max(1,n), bodyW=Math.max(3,Math.min(18,step*.72)); const X=i=>left+step*(i+.5),Y=v=>top+(hi-v)/(hi-lo)*(priceBottom-top);
   ctx.font='10px Segoe UI';ctx.textBaseline='middle';for(let i=0;i<=5;i++){const py=top+(priceBottom-top)*i/5;const pv=hi-(hi-lo)*i/5;ctx.strokeStyle='rgba(64,89,120,.28)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(w-right,py);ctx.stroke();ctx.fillStyle='#91a4bd';ctx.fillText(chartPrice(pv),w-right+7,py)}
-  // volume
-  const vmax=Math.max(1,...candleData.map(c=>Number(c.volume)||0));candleData.forEach((c,i)=>{const x=X(i),vol=(Number(c.volume)||0)/vmax*volumeH;const up=Number(c.close)>=Number(c.open);ctx.fillStyle=up?'rgba(34,197,94,.28)':'rgba(239,68,68,.28)';ctx.fillRect(x-bodyW/2,h-bottom-vol,bodyW,vol)});
+  const vmax=Math.max(1,...data.map(c=>Number(c.volume)||0));data.forEach((c,i)=>{const x=X(i),vol=(Number(c.volume)||0)/vmax*volumeH;const up=Number(c.close)>=Number(c.open);ctx.fillStyle=up?'rgba(34,197,94,.28)':'rgba(239,68,68,.28)';ctx.fillRect(x-bodyW/2,h-bottom-vol,bodyW,vol)});
   ctx.fillStyle='#71849c';ctx.fillText('VOL',left,h-bottom-volumeH-5);
-  // candles
-  candleData.forEach((c,i)=>{const x=X(i),o=Y(Number(c.open)),cl=Y(Number(c.close)),high=Y(Number(c.high)),low=Y(Number(c.low));const up=Number(c.close)>=Number(c.open),color=up?'#22c55e':'#ef4444';ctx.save();if(c.is_closed===false)ctx.globalAlpha=.42;ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,high);ctx.lineTo(x,low);ctx.stroke();ctx.fillStyle=color;const y=Math.min(o,cl),bh=Math.max(1.4,Math.abs(cl-o));ctx.fillRect(x-bodyW/2,y,bodyW,bh);ctx.restore()});
-  // EMAs
-  function line(series,color){ctx.strokeStyle=color;ctx.lineWidth=1.35;ctx.beginPath();let started=false;series.forEach((v,i)=>{if(v===null)return;const x=X(i),y=Y(v);if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y)});ctx.stroke()}
+  data.forEach((c,i)=>{const x=X(i),o=Y(Number(c.open)),cl=Y(Number(c.close)),high=Y(Number(c.high)),low=Y(Number(c.low));const up=Number(c.close)>=Number(c.open),color=up?'#22c55e':'#ef4444';ctx.save();if(c.is_closed===false)ctx.globalAlpha=.42;ctx.strokeStyle=color;ctx.lineWidth=Math.max(1,Math.min(1.6,bodyW*.12));ctx.beginPath();ctx.moveTo(x,high);ctx.lineTo(x,low);ctx.stroke();ctx.fillStyle=color;const y=Math.min(o,cl),bh=Math.max(2,Math.abs(cl-o));ctx.fillRect(x-bodyW/2,y,bodyW,bh);ctx.restore()});
+  function line(series,color){ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();let started=false;series.forEach((v,i)=>{if(v===null)return;const x=X(i),y=Y(v);if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y)});ctx.stroke()}
   line(e20,'#7bb1ff');line(e50,'#f59e0b');
-  // current price and open trade levels
   const current=Number(latestDashboard?.price);if(Number.isFinite(current))drawPriceLine(ctx,Y(current),left,w-right,'#22d3ee','NOW',current,[2,3]);
   if(pos){drawPriceLine(ctx,Y(Number(pos.entry_price)),left,w-right,'#7bb1ff','ENTRY',Number(pos.entry_price));drawPriceLine(ctx,Y(Number(pos.stop_price)),left,w-right,'#ef4444','STOP',Number(pos.stop_price));drawPriceLine(ctx,Y(Number(pos.take_profit_price)),left,w-right,'#22c55e','TAKE',Number(pos.take_profit_price));}
   const signalClose=Number(latestDashboard?.last_cycle?.signal_candle_close_time);
-  const signalIndex=Number.isFinite(signalClose)?candleData.findIndex(c=>Number(c.close_time)===signalClose):-1;
+  const globalSignalIndex=Number.isFinite(signalClose)?candleData.findIndex(c=>Number(c.close_time)===signalClose):-1;
+  const signalIndex=globalSignalIndex>=view.start&&globalSignalIndex<view.end?globalSignalIndex-view.start:-1;
   if(signalIndex>=0){const sx=X(signalIndex);ctx.save();ctx.strokeStyle='#22d3ee';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(sx,top);ctx.lineTo(sx,priceBottom);ctx.stroke();ctx.restore()}
-  // time labels
-  ctx.fillStyle='#71849c';ctx.textBaseline='alphabetic';const marks=5;for(let j=0;j<=marks;j++){const i=Math.min(n-1,Math.floor((n-1)*j/marks));const txt=new Date(Number(candleData[i].open_time)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});ctx.fillText(txt,Math.max(left,X(i)-18),h-7)}
-  // hover crosshair
-  if(candleHoverIndex!==null&&candleHoverIndex>=0&&candleHoverIndex<n){const i=candleHoverIndex,c=candleData[i],x=X(i);ctx.strokeStyle='rgba(210,225,244,.35)';ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.setLineDash([]);}
+  ctx.fillStyle='#71849c';ctx.textBaseline='alphabetic';const marks=Math.min(5,Math.max(1,n-1));for(let j=0;j<=marks;j++){const i=Math.min(n-1,Math.floor((n-1)*j/marks));const d=new Date(Number(data[i].open_time));const txt=n>80?d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}):d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});ctx.fillText(txt,Math.max(left,Math.min(w-right-54,X(i)-22)),h-7)}
+  if(candleHoverIndex!==null&&candleHoverIndex>=view.start&&candleHoverIndex<view.end){const i=candleHoverIndex-view.start,x=X(i);ctx.strokeStyle='rgba(210,225,244,.35)';ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.setLineDash([]);}
 }
 
 function showCandleTooltip(ev){
-  if(!candleData.length)return;const wrap=$('candleWrap'),rect=wrap.getBoundingClientRect(),left=12,right=82,plotW=rect.width-left-right;const x=ev.clientX-rect.left;if(x<left||x>rect.width-right){candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles();return}
-  const i=Math.max(0,Math.min(candleData.length-1,Math.floor((x-left)/(plotW/candleData.length))));candleHoverIndex=i;const c=candleData[i],tip=$('candleTooltip');const up=Number(c.close)>=Number(c.open);tip.innerHTML=`<b>${candleTime(c.open_time)}</b> · ${c.is_closed===false?'<span class="amber">FORMING</span>':'CLOSED'}<br>O ${chartPrice(c.open)} &nbsp; H ${chartPrice(c.high)}<br>L ${chartPrice(c.low)} &nbsp; C <span class="${up?'green':'red'}">${chartPrice(c.close)}</span><br>Volume ${Number(c.volume).toLocaleString('en-US',{maximumFractionDigits:4})}`;tip.style.display='block';tip.style.left=Math.min(rect.width-205,Math.max(8,x+14))+'px';tip.style.top='10px';drawCandles();
+  if(!candleData.length)return;
+  const view=candleViewport(), data=view.data, wrap=$('candleWrap'),rect=wrap.getBoundingClientRect(),left=12,right=82,plotW=rect.width-left-right;const x=ev.clientX-rect.left;
+  if(x<left||x>rect.width-right){candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles();return}
+  const localIndex=Math.max(0,Math.min(data.length-1,Math.floor((x-left)/(plotW/data.length))));
+  const i=view.start+localIndex;candleHoverIndex=i;const c=candleData[i],tip=$('candleTooltip');const up=Number(c.close)>=Number(c.open);tip.innerHTML=`<b>${candleTime(c.open_time)}</b> · ${c.is_closed===false?'<span class="amber">FORMING</span>':'CLOSED'}<br>O ${chartPrice(c.open)} &nbsp; H ${chartPrice(c.high)}<br>L ${chartPrice(c.low)} &nbsp; C <span class="${up?'green':'red'}">${chartPrice(c.close)}</span><br>Volume ${Number(c.volume).toLocaleString('en-US',{maximumFractionDigits:4})}`;tip.style.display='block';tip.style.left=Math.min(rect.width-205,Math.max(8,x+14))+'px';tip.style.top='10px';drawCandles();
 }
 
 async function act(url,msg){
@@ -480,11 +541,22 @@ async function loadAll(showLoading=false,force=false){
   }
 }
 $('focusSymbol').addEventListener('change',()=>{focusSymbol=$('focusSymbol').value;loadAll(true,true).then(()=>loadCandles(true));});
-$('candleInterval').addEventListener('change',()=>loadCandles(true));
-$('candleCount').addEventListener('change',()=>loadCandles(true));
+$('candleInterval').addEventListener('change',()=>{candleFollowLatest=true;candleViewEnd=0;loadCandles(true)});
+$('candleCount').addEventListener('change',()=>{candleFollowLatest=true;candleViewEnd=0;candleViewCount=Math.min(60,Number($('candleCount').value||60));loadCandles(true)});
 $('chartRefresh').addEventListener('click',()=>loadCandles(true));
-$('candleWrap').addEventListener('mousemove',showCandleTooltip);
-$('candleWrap').addEventListener('mouseleave',()=>{candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles()});
+$('chartZoomIn').addEventListener('click',()=>setChartViewCount(candleViewport().data.length*.72,.5));
+$('chartZoomOut').addEventListener('click',()=>setChartViewCount(candleViewport().data.length*1.4,.5));
+$('chartBack').addEventListener('click',()=>panChart(-Math.max(1,Math.round(candleViewport().data.length*.35))));
+$('chartForward').addEventListener('click',()=>panChart(Math.max(1,Math.round(candleViewport().data.length*.35))));
+$('chartLatest').addEventListener('click',()=>{candleFollowLatest=true;candleViewEnd=candleData.length;drawCandles()});
+$('chartAll').addEventListener('click',()=>{candleViewCount=Math.max(20,candleData.length);candleViewEnd=candleData.length;candleFollowLatest=true;drawCandles()});
+$('candleWrap').addEventListener('wheel',ev=>{if(!candleData.length)return;ev.preventDefault();const rect=$('candleWrap').getBoundingClientRect(),left=12,right=82,ratio=Math.max(0,Math.min(1,(ev.clientX-rect.left-left)/Math.max(1,rect.width-left-right)));setChartViewCount(candleViewport().data.length*(ev.deltaY>0?1.18:.84),ratio)},{passive:false});
+$('candleWrap').addEventListener('pointerdown',ev=>{if(ev.button!==0)return;candleDragStartX=ev.clientX;candleDragStartEnd=candleViewport().end;$('candleWrap').classList.add('dragging');$('candleWrap').setPointerCapture?.(ev.pointerId)});
+$('candleWrap').addEventListener('pointermove',ev=>{if(candleDragStartX===null){showCandleTooltip(ev);return}const rect=$('candleWrap').getBoundingClientRect(),view=candleViewport(),plotW=Math.max(1,rect.width-94),candlesPerPx=view.data.length/plotW,delta=Math.round((candleDragStartX-ev.clientX)*candlesPerPx);candleViewEnd=Math.max(view.data.length,Math.min(candleData.length,candleDragStartEnd+delta));candleFollowLatest=candleViewEnd>=candleData.length;candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles()});
+function endCandleDrag(ev){candleDragStartX=null;candleDragStartEnd=null;$('candleWrap').classList.remove('dragging');try{$('candleWrap').releasePointerCapture?.(ev.pointerId)}catch(_){}}
+$('candleWrap').addEventListener('pointerup',endCandleDrag);
+$('candleWrap').addEventListener('pointercancel',endCandleDrag);
+$('candleWrap').addEventListener('mouseleave',()=>{if(candleDragStartX===null){candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles()}});
 loadAll(true,true).then(()=>{if(latestDashboard?.config?.interval&&$('candleInterval').querySelector(`option[value="${latestDashboard.config.interval}"]`))$('candleInterval').value=latestDashboard.config.interval;loadCandles(true)});
 setInterval(()=>loadAll(false,false),1000);setInterval(()=>loadCandles(false),5000);setInterval(()=>{if(lastDashboardSuccessAt&&Date.now()-lastDashboardSuccessAt>5000)markDashboardStale('No successful dashboard update for more than 5 seconds')},1000);window.addEventListener('resize',()=>{drawChart(latestDashboard?.performance?.equity_curve||[]);drawCandles()});
 </script>
