@@ -325,8 +325,24 @@ function drawCandles(){
   const left=12,right=82,top=16,bottom=24,volumeH=72,gap=12; const priceBottom=h-bottom-volumeH-gap;
   const e20=data.map(c=>Number.isFinite(Number(c.ema_fast))?Number(c.ema_fast):null);
   const e50=data.map(c=>Number.isFinite(Number(c.ema_slow))?Number(c.ema_slow):null);
-  const overlay=[];const pos=latestDashboard?.open_trade;if(pos){overlay.push(Number(pos.entry_price),Number(pos.stop_price),Number(pos.take_profit_price))} if(latestDashboard?.price)overlay.push(Number(latestDashboard.price));
-  let lo=Math.min(...data.map(c=>Number(c.low)),...overlay.filter(Number.isFinite)),hi=Math.max(...data.map(c=>Number(c.high)),...overlay.filter(Number.isFinite)); const span=Math.max(1e-9,hi-lo);lo-=span*.04;hi+=span*.04;
+  const pos=latestDashboard?.open_trade;
+  const current=Number(latestDashboard?.price);
+  const entry=Number(pos?.entry_price);
+  const scaleValues=[
+    ...data.map(c=>Number(c.low)),
+    ...data.map(c=>Number(c.high)),
+    ...e20.filter(Number.isFinite),
+    ...e50.filter(Number.isFinite),
+    ...(Number.isFinite(current)?[current]:[]),
+    ...(Number.isFinite(entry)?[entry]:[]),
+  ].filter(Number.isFinite);
+  let lo=Math.min(...scaleValues),hi=Math.max(...scaleValues);
+  const rawSpan=Math.max(1e-9,hi-lo);
+  const minVisualSpan=Math.max(rawSpan,Math.max(Math.abs((hi+lo)/2)*0.0008,1e-6));
+  const pad=Math.max(rawSpan*.10,minVisualSpan*.08);
+  const mid=(hi+lo)/2;
+  if(rawSpan<minVisualSpan){lo=mid-minVisualSpan/2;hi=mid+minVisualSpan/2}
+  lo-=pad;hi+=pad;
   const plotW=w-left-right, n=data.length, step=plotW/Math.max(1,n), bodyW=Math.max(3,Math.min(18,step*.72)); const X=i=>left+step*(i+.5),Y=v=>top+(hi-v)/(hi-lo)*(priceBottom-top);
   ctx.font='10px Segoe UI';ctx.textBaseline='middle';for(let i=0;i<=5;i++){const py=top+(priceBottom-top)*i/5;const pv=hi-(hi-lo)*i/5;ctx.strokeStyle='rgba(64,89,120,.28)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(w-right,py);ctx.stroke();ctx.fillStyle='#91a4bd';ctx.fillText(chartPrice(pv),w-right+7,py)}
   const vmax=Math.max(1,...data.map(c=>Number(c.volume)||0));data.forEach((c,i)=>{const x=X(i),vol=(Number(c.volume)||0)/vmax*volumeH;const up=Number(c.close)>=Number(c.open);ctx.fillStyle=up?'rgba(34,197,94,.28)':'rgba(239,68,68,.28)';ctx.fillRect(x-bodyW/2,h-bottom-vol,bodyW,vol)});
@@ -334,8 +350,28 @@ function drawCandles(){
   data.forEach((c,i)=>{const x=X(i),o=Y(Number(c.open)),cl=Y(Number(c.close)),high=Y(Number(c.high)),low=Y(Number(c.low));const up=Number(c.close)>=Number(c.open),color=up?'#22c55e':'#ef4444';ctx.save();if(c.is_closed===false)ctx.globalAlpha=.42;ctx.strokeStyle=color;ctx.lineWidth=Math.max(1,Math.min(1.6,bodyW*.12));ctx.beginPath();ctx.moveTo(x,high);ctx.lineTo(x,low);ctx.stroke();ctx.fillStyle=color;const y=Math.min(o,cl),bh=Math.max(2,Math.abs(cl-o));ctx.fillRect(x-bodyW/2,y,bodyW,bh);ctx.restore()});
   function line(series,color){ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();let started=false;series.forEach((v,i)=>{if(v===null)return;const x=X(i),y=Y(v);if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y)});ctx.stroke()}
   line(e20,'#7bb1ff');line(e50,'#f59e0b');
-  const current=Number(latestDashboard?.price);if(Number.isFinite(current))drawPriceLine(ctx,Y(current),left,w-right,'#22d3ee','NOW',current,[2,3]);
-  if(pos){drawPriceLine(ctx,Y(Number(pos.entry_price)),left,w-right,'#7bb1ff','ENTRY',Number(pos.entry_price));drawPriceLine(ctx,Y(Number(pos.stop_price)),left,w-right,'#ef4444','STOP',Number(pos.stop_price));drawPriceLine(ctx,Y(Number(pos.take_profit_price)),left,w-right,'#22c55e','TAKE',Number(pos.take_profit_price));}
+  function drawTradeLevel(value,color,label,dash=[5,4]){
+    if(!Number.isFinite(value))return;
+    if(value>=lo&&value<=hi){drawPriceLine(ctx,Y(value),left,w-right,color,label,value,dash);return}
+    const above=value>hi;
+    const edgeY=above?top+8:priceBottom-8;
+    ctx.save();
+    ctx.font='10px Segoe UI';
+    ctx.fillStyle='#07111f';
+    const text=`${label} ${above?'↑':'↓'} ${chartPrice(value)}`;
+    const tw=ctx.measureText(text).width+10;
+    const tx=Math.max(left+4,w-right-tw);
+    ctx.fillRect(tx,edgeY-8,tw,16);
+    ctx.fillStyle=color;
+    ctx.fillText(text,tx+5,edgeY+3);
+    ctx.restore();
+  }
+  if(Number.isFinite(current))drawTradeLevel(current,'#22d3ee','NOW',[2,3]);
+  if(pos){
+    drawTradeLevel(Number(pos.entry_price),'#7bb1ff','ENTRY');
+    drawTradeLevel(Number(pos.stop_price),'#ef4444','STOP');
+    drawTradeLevel(Number(pos.take_profit_price),'#22c55e','TAKE');
+  }
   const signalClose=Number(latestDashboard?.last_cycle?.signal_candle_close_time);
   const globalSignalIndex=Number.isFinite(signalClose)?candleData.findIndex(c=>Number(c.close_time)===signalClose):-1;
   const signalIndex=globalSignalIndex>=view.start&&globalSignalIndex<view.end?globalSignalIndex-view.start:-1;
