@@ -467,3 +467,37 @@ python forward_test_report.py --limit 20
 These are analytical scenarios only. They do not alter the database, strategy,
 orders, risk limits, or live-trading gates, and they do not establish
 profitability or live readiness.
+
+
+## Multi-interval historical strategy comparison
+
+To compare the current strategy across 1m, 3m, 5m, and 15m candles without
+changing Testnet or placing orders, run:
+
+```powershell
+python compare_strategy_intervals.py
+```
+
+By default it downloads seven days of public Binance Spot candle history for all
+configured symbols and evaluates the current EMA/momentum/RSI/volume entry rules,
+stop loss, take profit, breakeven/trailing protection, configured fees, baseline
+slippage, and an additional stress-slippage scenario.
+
+Useful overrides:
+
+```powershell
+python compare_strategy_intervals.py --days 14
+python compare_strategy_intervals.py --intervals 1m,3m,5m,15m --notional 3000
+python compare_strategy_intervals.py --stress-slippage-bps 5
+```
+
+Entries are evaluated only on completed candles and are simulated at the next
+candle open. Strategy exits also execute at the next candle open. Because OHLC
+candles do not reveal intrabar event order, a candle that touches both stop and
+take-profit is conservatively treated as a stop first, and newly ratcheted
+trailing/breakeven stops apply from the next candle.
+
+The tool is research-only. It uses public historical market data, does not use
+the trading endpoints, does not mutate the bot database, and does not change the
+running Testnet configuration. Historical results do not guarantee future
+performance.
