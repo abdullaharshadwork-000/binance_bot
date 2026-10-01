@@ -190,3 +190,9 @@ def test_dashboard_formats_execution_details_as_rows_instead_of_raw_json():
     assert "Position quantity" in DASHBOARD_HTML
     assert "Fill price" in DASHBOARD_HTML
     assert "Protection status" in DASHBOARD_HTML
+
+
+def test_candlestick_chart_uses_local_market_scale_and_wider_bodies():
+    assert "overlayMargin=baseSpan*.35" in DASHBOARD_HTML
+    assert "Math.min(16,step*.74)" in DASHBOARD_HTML
+    assert "drawVisibleLevel" in DASHBOARD_HTML
