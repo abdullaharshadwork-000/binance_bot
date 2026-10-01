@@ -4,8 +4,10 @@ import argparse
 import asyncio
 import json
 import math
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,6 +20,9 @@ from app.strategy.ensemble import EnsembleStrategy
 
 INTERVALS = ("1m", "3m", "5m", "15m")
 PUBLIC_BINANCE = "https://api.binance.com"
+FETCH_RETRIES = 5
+CACHE_MAX_AGE_SECONDS = 30 * 60
+CACHE_DIR = Path("data/strategy_interval_cache")
 
 
 def interval_to_ms(interval: str) -> int:
@@ -29,6 +34,89 @@ def interval_to_ms(interval: str) -> int:
     return amount * factors[unit]
 
 
+def _cache_path(symbol: str, interval: str, days: int) -> Path:
+    return CACHE_DIR / f"{symbol}_{interval}_{days}d.json"
+
+
+def _load_history_checkpoint(
+    *, symbol: str, interval: str, days: int, now_ms: int
+) -> tuple[list[dict[str, Any]], int | None, int | None, bool]:
+    path = _cache_path(symbol, interval, days)
+    if not path.exists():
+        return [], None, None, False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        end_ms = int(payload["end_ms"])
+        if abs(now_ms - end_ms) > CACHE_MAX_AGE_SECONDS * 1000:
+            return [], None, None, False
+        rows = list(payload.get("rows") or [])
+        cursor = int(payload.get("cursor") or 0) or None
+        complete = bool(payload.get("complete"))
+        return rows, cursor, end_ms, complete
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return [], None, None, False
+
+
+def _save_history_checkpoint(
+    *,
+    symbol: str,
+    interval: str,
+    days: int,
+    end_ms: int,
+    cursor: int,
+    rows: list[dict[str, Any]],
+    complete: bool,
+) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_path(symbol, interval, days)
+    tmp = path.with_suffix(".tmp")
+    payload = {
+        "end_ms": end_ms,
+        "cursor": cursor,
+        "complete": complete,
+        "rows": rows,
+    }
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.replace(path)
+
+
+async def _get_klines_with_retry(
+    client: httpx.AsyncClient,
+    *,
+    params: dict[str, Any],
+    symbol: str,
+    interval: str,
+    retries: int = FETCH_RETRIES,
+) -> list:
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            response = await client.get("/api/v3/klines", params=params)
+            response.raise_for_status()
+            return response.json()
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
+            last_error = exc
+            retryable = not isinstance(exc, httpx.HTTPStatusError) or (
+                exc.response.status_code == 429 or exc.response.status_code >= 500
+            )
+            if not retryable or attempt >= retries:
+                break
+            delay = min(2 ** (attempt - 1), 8)
+            print(
+                f"[{symbol} {interval}] Binance request failed "
+                f"(attempt {attempt}/{retries}: {type(exc).__name__}). "
+                f"Retrying in {delay}s...",
+                file=sys.stderr,
+                flush=True,
+            )
+            await asyncio.sleep(delay)
+
+    raise RuntimeError(
+        f"Could not download {symbol} {interval} candles after {retries} attempts. "
+        "The partial download was saved, so run the command again to resume."
+    ) from last_error
+
+
 async def fetch_history(
     client: httpx.AsyncClient,
     *,
@@ -36,49 +124,93 @@ async def fetch_history(
     interval: str,
     days: int,
 ) -> pd.DataFrame:
-    """Fetch public Binance Spot candles without using trading credentials."""
-    end_ms = int(time.time() * 1000)
-    start_ms = end_ms - days * 86_400_000
-    cursor = start_ms
-    rows: list[dict[str, Any]] = []
+    """Fetch public Binance Spot candles with retry and resumable local checkpoints."""
+    now_ms = int(time.time() * 1000)
+    rows, cached_cursor, cached_end_ms, complete = _load_history_checkpoint(
+        symbol=symbol,
+        interval=interval,
+        days=days,
+        now_ms=now_ms,
+    )
 
-    while cursor < end_ms:
-        response = await client.get(
-            "/api/v3/klines",
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "startTime": cursor,
-                "endTime": end_ms,
-                "limit": 1000,
-            },
-        )
-        response.raise_for_status()
-        batch = response.json()
-        if not batch:
-            break
-
-        for k in batch:
-            rows.append(
-                {
-                    "open_time": int(k[0]),
-                    "open": float(k[1]),
-                    "high": float(k[2]),
-                    "low": float(k[3]),
-                    "close": float(k[4]),
-                    "volume": float(k[5]),
-                    "close_time": int(k[6]),
-                }
+    if cached_end_ms is not None:
+        end_ms = cached_end_ms
+        start_ms = end_ms - days * 86_400_000
+        cursor = cached_cursor or start_ms
+        if complete and rows:
+            print(
+                f"[{symbol} {interval}] using cached {len(rows)} candles",
+                file=sys.stderr,
+                flush=True,
             )
+        else:
+            print(
+                f"[{symbol} {interval}] resuming partial download "
+                f"({len(rows)} candles cached)",
+                file=sys.stderr,
+                flush=True,
+            )
+    else:
+        end_ms = now_ms
+        start_ms = end_ms - days * 86_400_000
+        cursor = start_ms
+        rows = []
 
-        last_open = int(batch[-1][0])
-        next_cursor = last_open + interval_to_ms(interval)
-        if next_cursor <= cursor:
-            break
-        cursor = next_cursor
+    if not complete:
+        while cursor < end_ms:
+            batch = await _get_klines_with_retry(
+                client,
+                params={
+                    "symbol": symbol,
+                    "interval": interval,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                    "limit": 1000,
+                },
+                symbol=symbol,
+                interval=interval,
+            )
+            if not batch:
+                complete = True
+                break
 
-        if len(batch) < 1000:
-            break
+            for k in batch:
+                rows.append(
+                    {
+                        "open_time": int(k[0]),
+                        "open": float(k[1]),
+                        "high": float(k[2]),
+                        "low": float(k[3]),
+                        "close": float(k[4]),
+                        "volume": float(k[5]),
+                        "close_time": int(k[6]),
+                    }
+                )
+
+            last_open = int(batch[-1][0])
+            next_cursor = last_open + interval_to_ms(interval)
+            if next_cursor <= cursor:
+                complete = True
+                break
+            cursor = next_cursor
+
+            complete = len(batch) < 1000 or cursor >= end_ms
+            _save_history_checkpoint(
+                symbol=symbol,
+                interval=interval,
+                days=days,
+                end_ms=end_ms,
+                cursor=cursor,
+                rows=rows,
+                complete=complete,
+            )
+            print(
+                f"[{symbol} {interval}] downloaded {len(rows)} candles",
+                file=sys.stderr,
+                flush=True,
+            )
+            if complete:
+                break
 
     if not rows:
         return pd.DataFrame(
@@ -372,12 +504,23 @@ async def build_comparison(
     notional: float,
     extra_stress_slippage_bps: float,
 ) -> dict[str, Any]:
-    timeout = httpx.Timeout(20.0)
-    async with httpx.AsyncClient(base_url=PUBLIC_BINANCE, timeout=timeout) as client:
+    timeout = httpx.Timeout(connect=15.0, read=60.0, write=20.0, pool=20.0)
+    limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
+    async with httpx.AsyncClient(
+        base_url=PUBLIC_BINANCE,
+        timeout=timeout,
+        limits=limits,
+        follow_redirects=True,
+    ) as client:
         comparison = {}
         for interval in intervals:
             symbol_results = []
             for symbol in settings.trading_symbols:
+                print(
+                    f"Fetching {symbol} {interval} ({days} days)...",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 frame = await fetch_history(
                     client,
                     symbol=symbol,
