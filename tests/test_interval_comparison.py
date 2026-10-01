@@ -1,3 +1,6 @@
+import asyncio
+
+import httpx
 import pandas as pd
 
 import compare_strategy_intervals as comparison
@@ -174,3 +177,80 @@ def test_combined_results_keep_per_symbol_and_chronological_metrics():
     assert result["stress_adjusted"]["total_pnl"] == -3
     assert result["per_symbol"]["BTCUSDT"]["trades"] == 1
     assert result["per_symbol"]["ETHUSDT"]["trades"] == 1
+
+
+def test_kline_fetch_retries_timeout_then_succeeds(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [[1, "1", "2", "0.5", "1.5", "10", 2]]
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, path, params):
+            self.calls += 1
+            if self.calls == 1:
+                request = httpx.Request("GET", "https://api.binance.com/api/v3/klines")
+                raise httpx.ReadTimeout("slow", request=request)
+            return FakeResponse()
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(comparison.asyncio, "sleep", no_sleep)
+    client = FakeClient()
+    result = asyncio.run(
+        comparison._get_klines_with_retry(
+            client,
+            params={"symbol": "BTCUSDT"},
+            symbol="BTCUSDT",
+            interval="1m",
+            retries=2,
+        )
+    )
+
+    assert client.calls == 2
+    assert result[0][0] == 1
+
+
+def test_history_checkpoint_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(comparison, "CACHE_DIR", tmp_path)
+    now_ms = 1_000_000
+    rows = [
+        {
+            "open_time": 1,
+            "open": 1.0,
+            "high": 2.0,
+            "low": 0.5,
+            "close": 1.5,
+            "volume": 10.0,
+            "close_time": 2,
+        }
+    ]
+
+    comparison._save_history_checkpoint(
+        symbol="BTCUSDT",
+        interval="1m",
+        days=7,
+        end_ms=now_ms,
+        cursor=123,
+        rows=rows,
+        complete=False,
+    )
+    loaded_rows, cursor, end_ms, complete = comparison._load_history_checkpoint(
+        symbol="BTCUSDT",
+        interval="1m",
+        days=7,
+        now_ms=now_ms,
+    )
+
+    assert loaded_rows == rows
+    assert cursor == 123
+    assert end_ms == now_ms
+    assert complete is False
