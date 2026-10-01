@@ -180,3 +180,13 @@ def test_dashboard_exposes_full_supported_interval_choices():
 
     for interval in SUPPORTED_INTERVALS:
         assert f'value="{interval}"' in DASHBOARD_HTML
+
+
+def test_dashboard_formats_execution_details_as_rows_instead_of_raw_json():
+    assert "JSON.stringify(e.details)" not in DASHBOARD_HTML
+    assert "Trade ID" in DASHBOARD_HTML
+    assert "Client order ID" in DASHBOARD_HTML
+    assert "Executed quantity" in DASHBOARD_HTML
+    assert "Position quantity" in DASHBOARD_HTML
+    assert "Fill price" in DASHBOARD_HTML
+    assert "Protection status" in DASHBOARD_HTML
