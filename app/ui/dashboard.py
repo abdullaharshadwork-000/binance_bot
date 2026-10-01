@@ -261,9 +261,23 @@ function drawCandles(){
   const left=12,right=82,top=16,bottom=24,volumeH=72,gap=12; const priceBottom=h-bottom-volumeH-gap;
   const e20=candleData.map(c=>Number.isFinite(Number(c.ema_fast))?Number(c.ema_fast):null);
   const e50=candleData.map(c=>Number.isFinite(Number(c.ema_slow))?Number(c.ema_slow):null);
-  const overlay=[];const pos=latestDashboard?.open_trade;if(pos){overlay.push(Number(pos.entry_price),Number(pos.stop_price),Number(pos.take_profit_price))} if(latestDashboard?.price)overlay.push(Number(latestDashboard.price));
-  let lo=Math.min(...candleData.map(c=>Number(c.low)),...overlay.filter(Number.isFinite)),hi=Math.max(...candleData.map(c=>Number(c.high)),...overlay.filter(Number.isFinite)); const span=Math.max(1e-9,hi-lo);lo-=span*.04;hi+=span*.04;
-  const plotW=w-left-right, n=candleData.length, step=plotW/Math.max(1,n), bodyW=Math.max(1,Math.min(10,step*.62)); const X=i=>left+step*(i+.5),Y=v=>top+(hi-v)/(hi-lo)*(priceBottom-top);
+  const pos=latestDashboard?.open_trade;
+  const scaleValues=[
+    ...candleData.flatMap(c=>[Number(c.low),Number(c.high)]),
+    ...e20.filter(Number.isFinite),
+    ...e50.filter(Number.isFinite),
+  ].filter(Number.isFinite);
+  const current=Number(latestDashboard?.price);
+  if(Number.isFinite(current))scaleValues.push(current);
+  let lo=Math.min(...scaleValues),hi=Math.max(...scaleValues);
+  const baseSpan=Math.max(1e-9,hi-lo);
+  // Keep position levels visible when they are near the active market range, but
+  // do not let a distant entry/stop/take level flatten the candles vertically.
+  const overlayCandidates=pos?[Number(pos.entry_price),Number(pos.stop_price),Number(pos.take_profit_price)].filter(Number.isFinite):[];
+  const overlayMargin=baseSpan*.35;
+  overlayCandidates.forEach(v=>{if(v>=lo-overlayMargin&&v<=hi+overlayMargin){lo=Math.min(lo,v);hi=Math.max(hi,v)}});
+  const span=Math.max(1e-9,hi-lo);lo-=span*.08;hi+=span*.08;
+  const plotW=w-left-right, n=candleData.length, step=plotW/Math.max(1,n), bodyW=Math.max(2,Math.min(16,step*.74)); const X=i=>left+step*(i+.5),Y=v=>top+(hi-v)/(hi-lo)*(priceBottom-top);
   // background grid and price scale
   ctx.font='10px Segoe UI';ctx.textBaseline='middle';for(let i=0;i<=5;i++){const py=top+(priceBottom-top)*i/5;const pv=hi-(hi-lo)*i/5;ctx.strokeStyle='rgba(64,89,120,.28)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(w-right,py);ctx.stroke();ctx.fillStyle='#91a4bd';ctx.fillText(chartPrice(pv),w-right+7,py)}
   // volume
@@ -275,8 +289,14 @@ function drawCandles(){
   function line(series,color){ctx.strokeStyle=color;ctx.lineWidth=1.35;ctx.beginPath();let started=false;series.forEach((v,i)=>{if(v===null)return;const x=X(i),y=Y(v);if(!started){ctx.moveTo(x,y);started=true}else ctx.lineTo(x,y)});ctx.stroke()}
   line(e20,'#7bb1ff');line(e50,'#f59e0b');
   // current price and open trade levels
-  const current=Number(latestDashboard?.price);if(Number.isFinite(current))drawPriceLine(ctx,Y(current),left,w-right,'#22d3ee','NOW',current,[2,3]);
-  if(pos){drawPriceLine(ctx,Y(Number(pos.entry_price)),left,w-right,'#7bb1ff','ENTRY',Number(pos.entry_price));drawPriceLine(ctx,Y(Number(pos.stop_price)),left,w-right,'#ef4444','STOP',Number(pos.stop_price));drawPriceLine(ctx,Y(Number(pos.take_profit_price)),left,w-right,'#22c55e','TAKE',Number(pos.take_profit_price));}
+  if(Number.isFinite(current))drawPriceLine(ctx,Y(current),left,w-right,'#22d3ee','NOW',current,[2,3]);
+  if(pos){
+    const plotTop=top,plotBottom=priceBottom;
+    const drawVisibleLevel=(value,color,label)=>{const v=Number(value),y=Y(v);if(Number.isFinite(v)&&y>=plotTop&&y<=plotBottom)drawPriceLine(ctx,y,left,w-right,color,label,v)};
+    drawVisibleLevel(pos.entry_price,'#7bb1ff','ENTRY');
+    drawVisibleLevel(pos.stop_price,'#ef4444','STOP');
+    drawVisibleLevel(pos.take_profit_price,'#22c55e','TAKE');
+  }
   const signalClose=Number(latestDashboard?.last_cycle?.signal_candle_close_time);
   const signalIndex=Number.isFinite(signalClose)?candleData.findIndex(c=>Number(c.close_time)===signalClose):-1;
   if(signalIndex>=0){const sx=X(signalIndex);ctx.save();ctx.strokeStyle='#22d3ee';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(sx,top);ctx.lineTo(sx,priceBottom);ctx.stroke();ctx.restore()}
