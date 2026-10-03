@@ -47,7 +47,6 @@ class EnsembleStrategy:
         bullish = x.ema_fast > x.ema_slow and x.close > x.ema_fast and momentum > 0
         bearish = x.ema_fast < x.ema_slow and x.close < x.ema_fast and momentum < 0
         fresh_bull_cross = prev.ema_fast <= prev.ema_slow and x.ema_fast > x.ema_slow
-        fresh_bear_cross = prev.ema_fast >= prev.ema_slow and x.ema_fast < x.ema_slow
 
         features = {
             "price": float(x.close),
@@ -96,18 +95,14 @@ class EnsembleStrategy:
                 score_components=components,
             )
 
-        if has_position and (bearish or fresh_bear_cross or rsi >= 76):
-            confidence = 0.60
-            if bearish:
+        if has_position and bearish:
+            confidence = 0.75
+            if features["trend_separation_atr"] >= self.min_trend_atr * 1.5:
                 confidence += 0.10
-            if fresh_bear_cross:
-                confidence += 0.10
-            if rsi >= 80:
-                confidence += 0.05
             return StrategySignal(
                 SignalSide.SELL,
                 min(confidence, 0.95),
-                "Exit signal from bearish trend/cross or overbought RSI",
+                "Exit signal from confirmed bearish trend",
                 features,
                 entry_checks=checks,
             )
