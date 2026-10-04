@@ -350,6 +350,11 @@ def backtest_frame(
     last_exit_time: int | None = None
     trades: list[dict[str, Any]] = []
 
+    # Keep one OHLCV-only frame outside the hot loop. The previous implementation
+    # rebuilt the column-selection DataFrame on every candle, which caused repeated
+    # allocations while the strategy itself only needs these five columns.
+    ohlcv = frame.loc[:, ["open", "high", "low", "close", "volume"]]
+
     def close_position(exit_market: float, exit_time: int, reason: str) -> None:
         nonlocal position, pending_strategy_exit, last_exit_time
         assert position is not None
@@ -417,7 +422,7 @@ def backtest_frame(
                 close_position(position.take_profit, int(candle.close_time), "Take profit")
                 continue
 
-        history = frame.iloc[: i + 1][["open", "high", "low", "close", "volume"]]
+        history = ohlcv.iloc[: i + 1]
         signal = strategy.evaluate(history, has_position=position is not None)
 
         if position is not None:
