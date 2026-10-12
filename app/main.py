@@ -65,6 +65,7 @@ async def health():
         "mode": settings.mode,
         "running": manager.running,
         "symbols": manager.symbols,
+        "universe": manager.universe_snapshot(),
         "running_symbols": [
             symbol for symbol, item in manager.bots.items() if item.running
         ],
@@ -72,6 +73,14 @@ async def health():
 
 
 async def _dashboard_payload(symbol: str | None = None) -> dict:
+    if settings.universe_mode == "top_volume" and not manager.running:
+        try:
+            # Populate a new dynamic watchlist once, then refresh it on the
+            # configured interval while stopped. Start always forces a fresh rank.
+            await manager.refresh_universe(force=False)
+        except Exception as exc:
+            manager.universe_error = str(exc)
+
     selected_bot = _selected_bot(symbol)
     selected_settings = selected_bot.settings
 
@@ -192,6 +201,7 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
             limit=20,
         ),
         "symbol_overview": manager.overview(),
+        "universe": manager.universe_snapshot(),
         "portfolio": {
             **manager.portfolio.snapshot(),
             "open_positions": manager.portfolio.db.count_open_trades(
@@ -210,6 +220,12 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
             "multi_symbol_live_allowed": selected_settings.allow_multi_symbol_live,
             "symbol": selected_settings.symbol,
             "symbols": manager.symbols,
+            "universe_mode": settings.universe_mode,
+            "universe_max_symbols": settings.universe_max_symbols,
+            "universe_min_quote_volume": settings.universe_min_quote_volume,
+            "universe_refreshed_at": manager.universe_refreshed_at,
+            "universe_ready": manager.universe_snapshot()["ready"],
+            "strategy_min_adx": selected_settings.strategy_min_adx,
             "base_asset": selected_settings.base_asset,
             "quote_asset": selected_settings.quote_asset,
             "interval": selected_settings.interval,
@@ -267,10 +283,19 @@ async def status(symbol: str | None = None):
         "last_cycle": data["last_cycle"],
         "last_execution": data["last_execution"],
         "symbol_overview": data["symbol_overview"],
+        "universe": data["universe"],
         "portfolio": data["portfolio"],
         "learning": data["learning"],
         "engine_error": data["engine_error"],
     }
+
+
+@app.post("/bot/universe/refresh")
+async def refresh_market_universe():
+    try:
+        return await manager.refresh_universe(force=True)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/bot/analyze")

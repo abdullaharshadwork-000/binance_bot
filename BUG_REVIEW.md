@@ -1,5 +1,7 @@
 # Code review findings
 
+> Historical snapshot reviewed 2026-09-23. The repository has changed since this review; findings, code locations, test counts, and conclusions below have not been re-audited against the current branch and must not be treated as a current risk assessment.
+
 Reviewed 2026-09-23. This is a code review and offline fault-injection audit, not a guarantee that every bug has been found. No real orders or credentialed API requests were made. Application code was not changed during this review. The existing suite passes: 11 tests.
 
 Evidence: **Reproduced** means an isolated Python check with temporary databases and mocked exchange methods demonstrated the behavior. **Code** means the defect follows from the inspected control flow; its end-to-end exchange/browser manifestation was not exercised.

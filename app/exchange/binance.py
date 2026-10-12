@@ -138,6 +138,114 @@ class BinanceClient:
                 return item
         raise ValueError(f"Unknown Binance symbol: {symbol}")
 
+    async def discover_top_volume_symbols(
+        self,
+        quote_asset: str,
+        *,
+        limit: int = 15,
+        min_quote_volume: float = 1_000_000.0,
+        excluded_bases: set[str] | None = None,
+    ) -> list[dict]:
+        """Return the most liquid eligible Spot pairs for one quote asset.
+
+        Ranking uses Binance's rolling 24-hour quote volume. Leveraged tokens and
+        configured stable-asset bases are excluded to avoid wasting the universe
+        on synthetic/near-flat markets. This is market discovery, not a buy signal.
+        """
+        quote = quote_asset.strip().upper()
+        if not quote or limit < 1 or not math.isfinite(min_quote_volume) or min_quote_volume < 0:
+            raise ValueError("Invalid quote asset or universe limits")
+
+        # Spot Testnet has a reduced symbol set and often lacks meaningful
+        # turnover. Keep its exchangeInfo as the tradability allowlist, but rank
+        # those symbols using the corresponding public Spot rolling volume.
+        info = await self._request("GET", "/api/v3/exchangeInfo")
+        self._exchange_info_cache = info
+        self._exchange_info_cached_at = time.monotonic()
+        if self.settings.mode == "testnet":
+            public_client = BinanceClient(self.settings.model_copy(update={"mode": "paper"}))
+            try:
+                tickers = await public_client._request("GET", "/api/v3/ticker/24hr")
+            finally:
+                await public_client.close()
+        else:
+            tickers = await self._request("GET", "/api/v3/ticker/24hr")
+        ticker_by_symbol = {
+            str(item.get("symbol") or ""): item
+            for item in (tickers if isinstance(tickers, list) else [])
+        }
+        excluded = {str(asset).strip().upper() for asset in (excluded_bases or set())}
+        excluded.update({quote})
+        candidates: list[dict] = []
+        leveraged_suffixes = ("UP", "DOWN", "BULL", "BEAR", "3L", "3S", "5L", "5S")
+
+        for market in info.get("symbols", []):
+            symbol = str(market.get("symbol") or "").upper()
+            base = str(market.get("baseAsset") or "").upper()
+            if (
+                not symbol
+                or not base
+                or market.get("quoteAsset") != quote
+                or market.get("status") != "TRADING"
+                or market.get("isSpotTradingAllowed") is False
+                or "MARKET" not in market.get("orderTypes", [])
+                or base in excluded
+                or base.endswith(leveraged_suffixes)
+            ):
+                continue
+
+            ticker = ticker_by_symbol.get(symbol)
+            if ticker is None:
+                continue
+            try:
+                quote_volume = float(Decimal(str(ticker.get("quoteVolume") or "0")))
+                last_price = float(Decimal(str(ticker.get("lastPrice") or "0")))
+                change = float(Decimal(str(ticker.get("priceChangePercent") or "0")))
+            except Exception:
+                continue
+            if (
+                not math.isfinite(quote_volume)
+                or not math.isfinite(last_price)
+                or not math.isfinite(change)
+                or quote_volume < min_quote_volume
+                or quote_volume <= 0
+                or last_price <= 0
+            ):
+                continue
+            candidates.append({
+                "symbol": symbol,
+                "base_asset": base,
+                "quote_asset": quote,
+                "quote_volume": quote_volume,
+                "price_change_percent": change,
+                "last_price": last_price,
+            })
+
+        candidates.sort(key=lambda item: (-item["quote_volume"], item["symbol"]))
+        return candidates[:limit]
+
+    async def ticker_prices(self, symbols: list[str]) -> dict[str, float]:
+        """Fetch a batch of current prices so a large watchlist avoids N REST calls."""
+        normalized = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+        if not normalized:
+            return {}
+        payload = await self._request(
+            "GET",
+            "/api/v3/ticker/price",
+            {"symbols": json.dumps(normalized, separators=(",", ":"))},
+        )
+        rows = payload if isinstance(payload, list) else [payload]
+        result: dict[str, float] = {}
+        for row in rows:
+            try:
+                symbol = str(row.get("symbol") or "").upper()
+                price = float(Decimal(str(row.get("price") or "0")))
+            except Exception:
+                continue
+            if symbol in normalized and math.isfinite(price) and price > 0:
+                result[symbol] = price
+        return result
+
     async def validate_symbol_assets(self, symbol: str, base_asset: str, quote_asset: str) -> None:
         info = await self.exchange_info(symbol)
         actual_base = str(info.get("baseAsset") or "")

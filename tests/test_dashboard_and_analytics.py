@@ -7,8 +7,11 @@ def test_dashboard_has_plain_language_sections():
     assert "Focused Market Risk" in DASHBOARD_HTML
     assert "Recent Portfolio Trades" in DASHBOARD_HTML
     assert "What the Dashboard Means" in DASHBOARD_HTML
-    assert "Multi-Symbol Signal Monitor" in DASHBOARD_HTML
-    assert "Start All Markets" in DASHBOARD_HTML
+    assert "Market watchlist" in DASHBOARD_HTML
+    assert "UNIVERSE SCANNER" in DASHBOARD_HTML
+    assert "Start trading" in DASHBOARD_HTML
+    assert "Discover top markets" in DASHBOARD_HTML
+    assert "Search symbol" in DASHBOARD_HTML
     assert "Focus market" in DASHBOARD_HTML
     assert "Recent Portfolio Trades" in DASHBOARD_HTML
     assert "Portfolio Performance Summary" in DASHBOARD_HTML
@@ -168,7 +171,9 @@ def test_interval_refresh_math():
 
 def test_dashboard_analysis_button_is_read_only_and_frontend_marks_stale_data():
     assert "act('/bot/analyze'" in DASHBOARD_HTML
-    assert "Analyze Focus Market" in DASHBOARD_HTML
+    assert "Analyze market" in DASHBOARD_HTML
+    assert "Scan all markets" in DASHBOARD_HTML
+    assert "refreshUniverse" in DASHBOARD_HTML
     assert "onclick=\"act('/bot/run-once'" not in DASHBOARD_HTML
     assert "dashboard-stale" in DASHBOARD_HTML
     assert "Focused Market Order" in DASHBOARD_HTML

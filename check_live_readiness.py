@@ -47,8 +47,24 @@ async def run_readiness_check() -> dict:
         )
     )
 
+    saved_universe = db.saved_trading_universe(mode=settings.mode)
+    symbols = list(dict.fromkeys([
+        *settings.trading_symbols,
+        *settings.configured_symbols,
+        *saved_universe,
+        *db.tracked_symbols(mode=settings.mode),
+    ]))
+    if settings.universe_mode == "top_volume":
+        checks.append(
+            _item(
+                "dynamic_universe_recorded",
+                bool(saved_universe),
+                (", ".join(saved_universe) if saved_universe else "Refresh the dashboard universe before readiness review"),
+            )
+        )
+
     unresolved_total = 0
-    for symbol in settings.trading_symbols:
+    for symbol in symbols:
         unresolved = db.unresolved_orders(mode=settings.mode, symbol=symbol)
         unresolved_total += len(unresolved)
         checks.append(
@@ -80,12 +96,12 @@ async def run_readiness_check() -> dict:
         )
 
         open_orders = await exchange.open_orders()
-        configured = set(settings.trading_symbols)
+        configured = set(symbols)
         configured_open = [
             order for order in open_orders if order.get("symbol") in configured
         ]
 
-        for symbol in settings.trading_symbols:
+        for symbol in symbols:
             trade = db.get_open_trade(symbol, settings.mode)
             symbol_orders = [
                 order for order in configured_open if order.get("symbol") == symbol
@@ -215,7 +231,7 @@ async def run_readiness_check() -> dict:
             "passed": passed,
             "failed": failed,
             "total": len(checks),
-            "configured_symbols": settings.trading_symbols,
+            "configured_symbols": symbols,
             "local_unresolved_orders": unresolved_total,
         },
         "checks": checks,

@@ -15,7 +15,7 @@ A conservative Binance Spot trading bot with a simple dashboard, paper/testnet/l
 - Persistent HTTP client reduces repeated connection setup overhead.
 - Live/testnet account balance refresh is throttled separately from price monitoring.
 - Dashboard refreshes every second and shows market-feed freshness/source.
-- Optional multi-symbol Testnet engine can run BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT (or another shared-quote list) in parallel.
+- Optional dynamic market universe ranks Binance Spot pairs by rolling 24-hour quote volume; stablecoin and leveraged-token bases are excluded, with manual pins available.
 - Portfolio entry coordination limits simultaneous positions and applies the daily realized-loss check across configured symbols.
 - Restart-safe high-water marks, breakeven protection, and ratcheting trailing stops lock in gains without ever loosening the original stop.
 
@@ -35,9 +35,13 @@ SYMBOL=BTCUSDT
 BASE_ASSET=BTC
 QUOTE_ASSET=USDT
 
-# Leave blank for single-symbol mode.
-# For multi-symbol Testnet testing:
-SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT
+# Rank the top liquid Spot markets instead of limiting the bot to a fixed list.
+UNIVERSE_MODE=top_volume
+UNIVERSE_MAX_SYMBOLS=15
+UNIVERSE_MIN_QUOTE_VOLUME=1000000
+UNIVERSE_REFRESH_MINUTES=60
+UNIVERSE_PINNED_SYMBOLS=
+SYMBOLS=
 MAX_CONCURRENT_POSITIONS=2
 ALLOW_MULTI_SYMBOL_LIVE=false
 
@@ -58,6 +62,7 @@ BREAKEVEN_ACTIVATION_PCT=0.006
 TRAILING_STOP_ACTIVATION_PCT=0.01
 TRAILING_STOP_DISTANCE_PCT=0.008
 MIN_SIGNAL_CONFIDENCE=0.70
+STRATEGY_MIN_ADX=16
 TRADING_FEE_BPS=10
 PAPER_SLIPPAGE_BPS=2
 
@@ -74,10 +79,17 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-Copy-Item .env.example .env
 python -m pytest
+Copy-Item .env.example .env
 python run.py
 ```
+
+Before `python run.py`, add **Binance Spot Testnet** API credentials to `.env`;
+`.env.example` defaults to `MODE=testnet` and intentionally contains blank keys.
+To run without credentials or exchange orders, use `python run.py --paper` instead.
+The sample universe scans eligible markets by 24-hour quote volume (15 maximum,
+minimum 1,000,000 quote units) rather than trading only the old four-symbol list.
+This broadens market coverage; it does not imply higher or guaranteed returns.
 
 Open `http://127.0.0.1:8000`.
 
@@ -89,16 +101,29 @@ The learning component uses fixed rules over recent closed trades to adjust the 
 
 - `paper`: real market data; simulated fills.
 - `testnet`: Binance Spot Testnet orders.
-- `live`: real Binance Spot orders. Real orders remain blocked unless `ALLOW_LIVE_TRADING=true`.
+- `live`: real Binance Spot orders. Execution requires `ALLOW_LIVE_TRADING=true`, `LIVE_PROTECTION_VALIDATED=true`, valid API credentials, and any applicable multi-symbol live opt-in.
 
 Never give the API key withdrawal permission. Keep `.env` private.
 
-## Multi-symbol mode
+## Market universe and multi-symbol mode
 
-The portfolio upgrade uses the configured `SYMBOLS` allowlist; the example is
-`BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT`. Start Bot monitors these markets concurrently
-and submits orders only when a completed-candle signal passes all entry checks.
-It does not force a trade on every coin. Existing mode and live-trading gates apply.
+`UNIVERSE_MODE=top_volume` discovers eligible Binance Spot pairs sharing
+`QUOTE_ASSET`, ranks them by rolling 24-hour quote volume, and selects up to
+`UNIVERSE_MAX_SYMBOLS`. In Testnet mode, the candidates must also exist in
+Testnet's Spot symbol list; ranking turnover comes from public live Spot data,
+while candles, prices, and orders still use Testnet. It excludes common stablecoin
+bases and leveraged-token suffixes; `UNIVERSE_MIN_QUOTE_VOLUME` sets a liquidity
+floor. `SYMBOLS` and
+`UNIVERSE_PINNED_SYMBOLS` can add manually selected pairs. Refresh the watchlist
+from the dashboard, or the engine refreshes it before Start. Existing open
+positions and unresolved orders stay tracked even if their pair leaves the ranking.
+Use `UNIVERSE_MODE=configured` to retain a fixed symbol list.
+
+The bot monitors selected markets concurrently and only enters when a completed
+candle passes the strategy, liquidity, account, and portfolio checks. It does not
+force a trade on every coin. A larger universe increases opportunities and
+operational load; it does not promise more profit. Defaults keep the portfolio to
+two simultaneous positions and 15% maximum configured-coin exposure.
 
 All bots share one background account request and one portfolio valuation:
 quote cash is counted once, and configured coin holdings (including locked
@@ -113,6 +138,13 @@ Additional settings (defaults apply without changing an existing `.env`):
 
 | Setting | Default | Effect |
 |---|---|---|
+| `UNIVERSE_MODE` | `configured` in code; `top_volume` in `.env.example` | Choose a fixed list or a rolling 24-hour quote-volume-ranked Spot universe. |
+| `UNIVERSE_MAX_SYMBOLS` | `15` | Maximum dynamically ranked markets (manual pins and tracked positions are retained). |
+| `UNIVERSE_MIN_QUOTE_VOLUME` | `1,000,000` | Minimum 24-hour quote turnover for dynamically selected pairs. |
+| `UNIVERSE_REFRESH_MINUTES` | `60` | Minimum refresh interval while stopped; explicit dashboard refresh and Start refresh immediately. |
+| `UNIVERSE_PINNED_SYMBOLS` | empty | Comma-separated manual Spot pairs to keep in addition to the volume-ranked set. |
+| `UNIVERSE_EXCLUDED_BASES` | common stablecoins | Comma-separated base assets excluded from dynamic discovery. |
+| `STRATEGY_MIN_ADX` | `16` | Requires additional directional-trend strength for new entries; this is a heuristic, not a profitability claim. |
 | `MAX_PORTFOLIO_EXPOSURE_FRACTION` | `0.15` | Blocks entries that would take combined configured-coin exposure above 15% of portfolio equity. |
 | `ACCOUNT_MAX_AGE_SECONDS` | `15` | Blocks entries when account valuation is too old; protective exits continue independently. Must be at least `ACCOUNT_REFRESH_SECONDS`. |
 | `MAX_ENTRY_DEVIATION_PCT` | `0.015` | Rejects entries when price has moved more than 1.5% from the signal candle close. |
@@ -137,9 +169,12 @@ Run offline regression checks with `python -m pytest`. These verify execution
 and accounting behavior, not strategy profitability. Backtesting and sustained
 Testnet validation remain necessary before enabling live trading.
 
-Set `SYMBOLS` to a comma-separated list of Spot symbols that share `QUOTE_ASSET`. Each symbol gets its own strategy state, WebSocket price monitor, open-position record, order reconciliation, and learning profile. The manager runs them concurrently, while `MAX_CONCURRENT_POSITIONS` prevents every qualifying signal from opening at once.
-
-Multi-symbol live trading has a separate `ALLOW_MULTI_SYMBOL_LIVE` safety gate and should remain disabled until the Testnet behavior has been reviewed over a meaningful sample of trades. More markets increase the number of opportunities and the number of ways to lose; they do not guarantee higher profit.
+Each active market gets an independent strategy state, price stream, position record,
+order reconciliation, and learning profile. Portfolio cash, exposure, unresolved-order,
+and position-count checks are coordinated across the selected universe. In live
+mode, a multi-symbol universe has the separate `ALLOW_MULTI_SYMBOL_LIVE` gate and
+should remain disabled until Testnet behavior has been reviewed over a meaningful
+sample. More markets increase both the number of opportunities and the ways to lose.
 
 ## Important
 
@@ -151,11 +186,13 @@ Trailing protection is evaluated by the running bot and is not an exchange-resid
 ### Entry quality and decision reporting
 
 Entries require relative volume of at least `STRATEGY_MIN_VOLUME_RATIO` (default
-0.75) and a close no more than `STRATEGY_MAX_EXTENSION_ATR` (default 2.0) ATR
-above the fast EMA. These filters apply to entries, while bearish strategy exits
-and protective stops remain active. Invalid OHLCV or unavailable latest indicators
-produce HOLD rather than silently evaluating an older candle. The risk status
-reports the final rejection if the portfolio guard or broker blocks an entry.
+0.75), a close no more than `STRATEGY_MAX_EXTENSION_ATR` (default 2.0) ATR above
+the fast EMA, adequate ATR-normalized EMA separation, and ADX/directional-movement
+confirmation of a rising trend. These filters apply to entries, while bearish
+strategy exits and protective stops remain active. Invalid OHLCV or unavailable
+latest indicators produce HOLD rather than silently evaluating an older candle.
+The risk status reports the final rejection if the portfolio guard or broker blocks
+an entry. These are transparent heuristics—not a validated edge or a win probability.
 
 These are conservative heuristics, not a validated profitability improvement.
 Evaluate them with real Testnet fills, fees and slippage before live use. Restart

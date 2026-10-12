@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 
 from app.agents.orchestrator import TradingOrchestrator
 from app.config import Settings
+from app.exchange.binance import BinanceClient
 from app.models import ExecutionResult
 from app.runtime_lock import RuntimeFileLock
 from app.storage.db import TradingDB
@@ -266,40 +267,199 @@ class MultiSymbolTradingManager:
         self._control_lock = asyncio.Lock()
         self._dashboard_price_lock = asyncio.Lock()
         self._runtime_lock = RuntimeFileLock(settings.database_path)
-
-        symbols = settings.trading_symbols
-        profile_path = Path(settings.learning_profile_path)
-
-        for symbol in symbols:
-            base_asset = settings.base_for_symbol(symbol)
-            if base_asset is None:
-                raise ValueError(
-                    f"Could not derive base asset for {symbol} using quote asset "
-                    f"{settings.quote_asset}"
-                )
-
-            if len(symbols) > 1:
-                child_profile = str(
-                    profile_path.with_name(
-                        f"{profile_path.stem}_{symbol}{profile_path.suffix}"
-                    )
-                )
-            else:
-                child_profile = settings.learning_profile_path
-
-            child_settings = settings.model_copy(
-                update={
-                    "symbol": symbol,
-                    "base_asset": base_asset,
-                    "symbols": symbol,
-                    "learning_profile_path": child_profile,
-                }
-            )
-            self.bots[symbol] = TradingOrchestrator(
-                child_settings,
-                portfolio_guard=self.portfolio,
-            )
+        self.universe_metadata: dict[str, dict] = {}
+        self.universe_error: str | None = None
+        self.universe_refreshed_at: str | None = None
+        self._universe_refreshed_monotonic: float | None = None
+        self._universe_last_attempt_monotonic: float | None = None
+        self._build_bots(settings.trading_symbols)
         self.portfolio.bots = self.bots
+
+    def _build_bots(self, symbols: list[str]) -> None:
+        selected = list(dict.fromkeys(symbols))
+        self.bots = {
+            symbol: self._build_bot(symbol, len(selected))
+            for symbol in selected
+        }
+
+    def _build_bot(self, symbol: str, total_symbols: int) -> TradingOrchestrator:
+        base_asset = self.settings.base_for_symbol(symbol)
+        if base_asset is None:
+            raise ValueError(
+                f"Could not derive base asset for {symbol} using quote asset "
+                f"{self.settings.quote_asset}"
+            )
+        profile_path = Path(self.settings.learning_profile_path)
+        child_profile = (
+            str(profile_path.with_name(
+                f"{profile_path.stem}_{symbol}{profile_path.suffix}"
+            ))
+            if total_symbols > 1
+            else self.settings.learning_profile_path
+        )
+        child_settings = self.settings.model_copy(
+            update={
+                "symbol": symbol,
+                "base_asset": base_asset,
+                "symbols": symbol,
+                "learning_profile_path": child_profile,
+            }
+        )
+        return TradingOrchestrator(child_settings, portfolio_guard=self.portfolio)
+
+    async def _refresh_universe_unlocked(self, *, force: bool = True) -> dict:
+        if self.running:
+            raise RuntimeError("Stop all markets before refreshing the trading universe")
+        if any(bot._manual_cycle_active for bot in self.bots.values()):
+            raise RuntimeError("Wait for manual analysis/order checks to finish before refreshing markets")
+        if (
+            not force
+            and self._universe_last_attempt_monotonic is not None
+            and time.monotonic() - self._universe_last_attempt_monotonic
+            < self.settings.universe_refresh_minutes * 60
+        ):
+            return self.universe_snapshot()
+        self._universe_last_attempt_monotonic = time.monotonic()
+
+        metadata: dict[str, dict] = {}
+        if self.settings.universe_mode == "top_volume":
+            discovery = BinanceClient(self.settings)
+            try:
+                ranked = await discovery.discover_top_volume_symbols(
+                    self.settings.quote_asset,
+                    limit=self.settings.universe_max_symbols,
+                    min_quote_volume=self.settings.universe_min_quote_volume,
+                    excluded_bases=self.settings.excluded_base_assets,
+                )
+                metadata = {item["symbol"]: item for item in ranked}
+                ordered = [item["symbol"] for item in ranked]
+
+                # Legacy SYMBOLS and explicit pins remain included, but no longer
+                # limit discovery to a fixed list.
+                pins = [
+                    *self.settings.configured_symbols,
+                    *self.settings.pinned_trading_symbols,
+                ]
+                for symbol in dict.fromkeys(pins):
+                    base = self.settings.base_for_symbol(symbol)
+                    if base is None:
+                        raise ValueError(
+                            f"Pinned symbol {symbol} must share quote asset "
+                            f"{self.settings.quote_asset}"
+                        )
+                    await discovery.validate_symbol_assets(
+                        symbol, base, self.settings.quote_asset
+                    )
+                    if symbol not in metadata:
+                        metadata[symbol] = {
+                            "symbol": symbol,
+                            "base_asset": base,
+                            "quote_asset": self.settings.quote_asset,
+                            "quote_volume": 0.0,
+                            "price_change_percent": 0.0,
+                            "last_price": None,
+                        }
+                    metadata[symbol]["pinned"] = True
+                    ordered.append(symbol)
+            finally:
+                await discovery.close()
+
+            tracked = self.portfolio.db.tracked_symbols(mode=self.settings.mode)
+            for symbol in tracked:
+                if self.settings.base_for_symbol(symbol) is None:
+                    raise RuntimeError(
+                        f"Tracked position/order {symbol} does not match "
+                        f"QUOTE_ASSET={self.settings.quote_asset}; reconcile it before "
+                        "changing the market universe"
+                    )
+                if symbol not in metadata:
+                    metadata[symbol] = {
+                        "symbol": symbol,
+                        "base_asset": self.settings.base_for_symbol(symbol),
+                        "quote_asset": self.settings.quote_asset,
+                        "quote_volume": 0.0,
+                        "price_change_percent": 0.0,
+                        "last_price": None,
+                    }
+                metadata[symbol]["tracked"] = True
+                ordered.append(symbol)
+            selected = list(dict.fromkeys(ordered))
+            if not selected:
+                raise RuntimeError(
+                    "No eligible Spot markets were discovered. Lower "
+                    "UNIVERSE_MIN_QUOTE_VOLUME, pin supported symbols, or use configured mode."
+                )
+        else:
+            selected = self.settings.trading_symbols
+            metadata = {
+                symbol: {
+                    "symbol": symbol,
+                    "base_asset": self.settings.base_for_symbol(symbol),
+                    "quote_asset": self.settings.quote_asset,
+                    "quote_volume": None,
+                    "price_change_percent": None,
+                    "last_price": None,
+                }
+                for symbol in selected
+            }
+
+        if (
+            self.settings.mode == "live"
+            and len(selected) > 1
+            and not self.settings.allow_multi_symbol_live
+        ):
+            raise RuntimeError(
+                "Dynamic universe exceeds one market in live mode; set "
+                "ALLOW_MULTI_SYMBOL_LIVE=true only after Testnet validation."
+            )
+
+        old_bots = self.bots
+        next_bots: dict[str, TradingOrchestrator] = {}
+        for symbol in selected:
+            if symbol in old_bots:
+                next_bots[symbol] = old_bots[symbol]
+            else:
+                next_bots[symbol] = self._build_bot(symbol, len(selected))
+        for symbol, bot in old_bots.items():
+            if symbol not in next_bots:
+                await bot.exchange.close()
+
+        self.bots = next_bots
+        self.portfolio.bots = self.bots
+        self.portfolio.symbols = list(selected)
+        self.portfolio.db.save_trading_universe(
+            mode=self.settings.mode,
+            symbols=selected,
+        )
+        self.universe_metadata = metadata
+        self.universe_error = None
+        self.universe_refreshed_at = datetime.now(timezone.utc).isoformat()
+        self._universe_refreshed_monotonic = time.monotonic()
+        return self.universe_snapshot()
+
+    async def refresh_universe(self, *, force: bool = True) -> dict:
+        async with self._control_lock:
+            try:
+                return await self._refresh_universe_unlocked(force=force)
+            except Exception as exc:
+                self.universe_error = str(exc)
+                raise
+
+    def universe_snapshot(self) -> dict:
+        return {
+            "mode": self.settings.universe_mode,
+            "ready": self.settings.universe_mode == "configured"
+            or self._universe_refreshed_monotonic is not None,
+            "symbols": self.symbols,
+            "markets": [
+                self.universe_metadata.get(symbol, {"symbol": symbol})
+                for symbol in self.symbols
+            ],
+            "max_symbols": self.settings.universe_max_symbols,
+            "min_quote_volume": self.settings.universe_min_quote_volume,
+            "refreshed_at": self.universe_refreshed_at,
+            "error": self.universe_error,
+        }
 
     @property
     def symbols(self) -> list[str]:
@@ -326,6 +486,38 @@ class MultiSymbolTradingManager:
     async def refresh_stopped_market_prices(self) -> dict[str, str]:
         """Value every configured coin without starting strategies or placing orders."""
         async with self._dashboard_price_lock:
+            if self.settings.universe_mode == "top_volume":
+                stale_symbols = []
+                for symbol, bot in self.bots.items():
+                    if bot.running:
+                        continue
+                    snapshot = bot.market_snapshot()
+                    age = snapshot.get("price_age_ms")
+                    if (
+                        snapshot.get("price") is None
+                        or age is None
+                        or age > bot.settings.market_data_stale_seconds * 1000
+                    ):
+                        stale_symbols.append(symbol)
+                if not stale_symbols:
+                    return {}
+                try:
+                    prices = await self.primary_bot.exchange.ticker_prices(stale_symbols)
+                except Exception as exc:
+                    return {symbol: str(exc) for symbol in stale_symbols}
+                errors = {}
+                for symbol in stale_symbols:
+                    price = prices.get(symbol)
+                    bot = self.bots[symbol]
+                    if price is None:
+                        errors[symbol] = "Batch ticker response did not include this market"
+                    elif not bot.running:
+                        bot.latest_price = price
+                        bot.latest_price_event_ms = int(time.time() * 1000)
+                        bot.latest_price_received_monotonic = time.monotonic()
+                        bot.latest_price_source = "rest-dashboard"
+                return errors
+
             async def refresh(symbol, bot):
                 if bot.running:
                     return None
@@ -355,10 +547,14 @@ class MultiSymbolTradingManager:
             return await self._start_unlocked()
 
     async def _start_unlocked(self) -> dict[str, bool]:
+        if self.running:
+            return {symbol: False for symbol in self.symbols}
         started: dict[str, bool] = {}
         started_bots: list[TradingOrchestrator] = []
         self._runtime_lock.acquire()
         try:
+            if self.settings.universe_mode == "top_volume":
+                await self._refresh_universe_unlocked(force=True)
             for symbol, bot in self.bots.items():
                 did_start = await bot.start()
                 started[symbol] = did_start
@@ -407,6 +603,7 @@ class MultiSymbolTradingManager:
 
     def overview(self) -> list[dict]:
         rows = []
+        rank = {symbol: index + 1 for index, symbol in enumerate(self.symbols)}
         for symbol, bot in self.bots.items():
             cycle = bot.last_cycle or {}
             signal = cycle.get("signal") or {}
@@ -417,6 +614,11 @@ class MultiSymbolTradingManager:
                     "symbol": symbol,
                     "base_asset": bot.settings.base_asset,
                     "quote_asset": bot.settings.quote_asset,
+                    "quote_volume": self.universe_metadata.get(symbol, {}).get("quote_volume"),
+                    "price_change_percent": self.universe_metadata.get(symbol, {}).get("price_change_percent"),
+                    "universe_rank": rank.get(symbol),
+                    "pinned": bool(self.universe_metadata.get(symbol, {}).get("pinned")),
+                    "tracked": bool(self.universe_metadata.get(symbol, {}).get("tracked")),
                     "running": bot.running,
                     "price": bot.latest_price,
                     "signal": signal.get("side", "WAITING"),
