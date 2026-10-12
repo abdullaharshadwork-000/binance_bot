@@ -44,6 +44,7 @@ class TradingOrchestrator:
             min_trend_atr=settings.strategy_min_trend_atr,
             min_volume_ratio=settings.strategy_min_volume_ratio,
             max_extension_atr=settings.strategy_max_extension_atr,
+            min_adx=settings.strategy_min_adx,
         )
         self.risk = RiskManager(settings)
         self.learning = LearningAgent(settings)
@@ -168,6 +169,20 @@ class TradingOrchestrator:
         snapshot = self.market_snapshot()
         if snapshot["websocket_connected"] and snapshot["price"] is not None:
             return float(snapshot["price"]), "websocket", snapshot["price_age_ms"]
+        # Reuse a recent REST fallback until the stale window expires. Without
+        # this throttle a multi-symbol universe with a quiet/reconnecting stream
+        # can issue one ticker request per symbol per fast cycle.
+        if (
+            snapshot["price"] is not None
+            and snapshot["source"] in {"rest", "rest-dashboard"}
+            and snapshot["price_age_ms"] is not None
+            and snapshot["price_age_ms"] <= self.settings.market_data_stale_seconds * 1000
+        ):
+            return (
+                float(snapshot["price"]),
+                str(snapshot["source"]),
+                snapshot["price_age_ms"],
+            )
 
         price = await self.exchange.ticker_price(self.settings.symbol)
         now_ms = int(time.time() * 1000)

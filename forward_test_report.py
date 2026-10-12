@@ -105,11 +105,18 @@ def build_report(
     if fee_bps < 0 or slippage_bps < 0:
         raise ValueError("fee/slippage bps must be non-negative")
 
+    symbols = list(dict.fromkeys([
+        *settings.trading_symbols,
+        *settings.configured_symbols,
+        *db.saved_trading_universe(mode="testnet"),
+        *db.trade_symbols(mode="testnet"),
+    ]))
+    symbol_set = set(symbols)
     trades = db.closed_trades(limit=limit, mode="testnet")
     trades = [
         trade
         for trade in trades
-        if str(trade.get("symbol") or "") in set(settings.trading_symbols)
+        if str(trade.get("symbol") or "") in symbol_set
     ]
     trades.sort(key=lambda row: (str(row.get("closed_at") or ""), int(row["id"])))
 
@@ -171,7 +178,7 @@ def build_report(
         }
 
     learning_progress = {}
-    for symbol in settings.trading_symbols:
+    for symbol in symbols:
         symbol_closed = len(db.closed_trades(mode="testnet", symbol=symbol))
         learning_progress[symbol] = {
             "closed_trades": symbol_closed,
@@ -184,7 +191,7 @@ def build_report(
 
     return {
         "mode": settings.mode,
-        "symbols": settings.trading_symbols,
+        "symbols": symbols,
         "closed_trades": len(rows),
         "learning_threshold_per_symbol": settings.min_trades_for_learning,
         "learning_progress": learning_progress,

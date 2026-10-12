@@ -6,9 +6,9 @@ DASHBOARD_HTML = r'''<!doctype html>
   <title>Agentic Binance Bot</title>
   <style>
     :root {
-      --bg:#07111f; --panel:#0d1b2e; --panel2:#10223a; --line:#203754;
-      --text:#e7eef8; --muted:#91a4bd; --blue:#3b82f6; --green:#22c55e;
-      --red:#ef4444; --amber:#f59e0b; --cyan:#22d3ee;
+      --bg:#080d17; --panel:#101827; --panel2:#141f30; --line:rgba(148,163,184,.14);
+      --text:#f1f5f9; --muted:#93a4b8; --blue:#7ba8ff; --green:#38d9a9;
+      --red:#fb7185; --amber:#f6bd60; --cyan:#5eead4; --gold:#f0b90b;
     }
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
@@ -43,23 +43,55 @@ DASHBOARD_HTML = r'''<!doctype html>
     details{margin-top:10px}summary{cursor:pointer;color:#7bb1ff;font-size:12px;font-weight:700}pre{white-space:pre-wrap;word-break:break-word;background:#06101d;border:1px solid var(--line);padding:12px;border-radius:10px;color:#b9c9db;max-height:330px;overflow:auto;font-size:11px}
     @media(max-width:1080px){.stats{grid-template-columns:repeat(3,1fr)}.two,.three{grid-template-columns:1fr}}
     @media(max-width:650px){.wrap{padding:15px}.stats{grid-template-columns:repeat(2,1fr)}.help-grid{grid-template-columns:1fr}.metric-value{font-size:20px}.controls{align-items:stretch}.focus-control{width:100%;justify-content:space-between}.focus-control select{flex:1}}@media(max-width:460px){.stats{grid-template-columns:1fr}.controls button{flex:1 1 calc(50% - 6px)}.row{gap:12px}.key{flex-basis:46%}}
+    body{background:radial-gradient(ellipse at 12% -12%,rgba(59,130,246,.16),transparent 38%),radial-gradient(ellipse at 98% 10%,rgba(20,184,166,.08),transparent 30%),var(--bg);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:.005em}
+    .wrap{max-width:1480px;padding:28px 30px 36px}
+    .header{align-items:center;padding:7px 2px 21px;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:20px}
+    .brand-lockup{display:flex;align-items:center;gap:15px}.brand-mark{width:46px;height:46px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(145deg,#f8d14b,#e9a912);color:#101827;font-size:24px;font-weight:950;box-shadow:0 8px 28px rgba(240,185,11,.18)}
+    .eyebrow{font-size:10px;line-height:1.5;letter-spacing:.16em;font-weight:850;color:#7f91a8;margin-bottom:4px}
+    h1{font-size:25px;letter-spacing:-.035em;margin:0 0 4px}.sub{font-size:13px}
+    .header-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mode-pill,.badge{letter-spacing:.035em}
+    .mode-pill{padding:8px 12px;border-color:rgba(148,163,184,.18)}
+    .grid{gap:16px}.stats{grid-template-columns:repeat(7,minmax(130px,1fr));margin-bottom:16px}
+    .card{background:linear-gradient(160deg,rgba(22,33,51,.96),rgba(14,22,35,.98));border-color:rgba(148,163,184,.13);border-radius:17px;padding:18px;box-shadow:0 12px 36px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.025)}
+    h2{font-size:15px;letter-spacing:-.012em}.metric-label{font-size:10px;letter-spacing:.13em;font-weight:800}.metric-value{font-size:23px;letter-spacing:-.035em}.metric-note{font-size:11px}
+    .controls{gap:9px;margin-bottom:17px}.focus-control{border-radius:11px;background:rgba(16,24,39,.85);border-color:var(--line);padding:6px 8px 6px 12px}.focus-control select,.chart-controls select,.market-tools select,.market-tools input{background:#0b1320;color:var(--text);border:1px solid rgba(148,163,184,.17);border-radius:9px;padding:9px 11px;outline:none}.focus-control select:focus,.chart-controls select:focus,.market-tools select:focus,.market-tools input:focus{border-color:rgba(123,168,255,.75);box-shadow:0 0 0 3px rgba(123,168,255,.1)}
+    button{border-radius:10px;padding:10px 14px;font-size:12px;letter-spacing:.01em;transition:transform .15s ease,border-color .15s ease,filter .15s ease}.b-blue{background:linear-gradient(135deg,#4c83f6,#3970da)}.b-green{background:linear-gradient(135deg,#15a87b,#12825f)}.b-red{background:linear-gradient(135deg,#d94c63,#b9334d)}.b-gray{background:#1b293b;border:1px solid rgba(148,163,184,.14);color:#dbe5f1}.b-gray:hover{border-color:rgba(148,163,184,.28)}
+    .market-head{align-items:center;margin-bottom:13px}.market-tools{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.market-tools input{width:150px}.market-tools select{font-size:11px;max-width:170px}.market-tools input::placeholder{color:#708198}.market-tools button{white-space:nowrap}
+    .market-title-note{max-width:790px;line-height:1.5}.explain{background:rgba(8,15,26,.52);border-color:rgba(148,163,184,.1);border-radius:11px}.notice{border-radius:12px}
+    .table-wrap{border:1px solid rgba(148,163,184,.1);border-radius:11px}table{min-width:950px;font-size:11px}th{background:#111a28;letter-spacing:.08em;padding:11px 10px}td{padding:11px 10px;border-color:rgba(148,163,184,.09)}tbody tr[data-symbol]{cursor:pointer}tbody tr[data-symbol]:hover td{background:rgba(123,168,255,.075)}.market-symbol{display:flex;align-items:center;gap:8px}.market-rank{font-size:9px;color:#64748b;border:1px solid rgba(148,163,184,.16);border-radius:5px;padding:2px 5px}.market-change{font-variant-numeric:tabular-nums}.market-volume{font-variant-numeric:tabular-nums;color:#c4d0de}.table-empty{padding:24px;text-align:center;color:var(--muted);font-size:12px}
+    .candle-wrap{height:460px;border-radius:13px;background:rgba(7,13,22,.72);border-color:rgba(148,163,184,.12)}.two,.three{gap:16px}.footer{text-align:left;border-top:1px solid rgba(148,163,184,.1);margin-top:7px;padding-top:14px;font-size:11px}
+    .loading{cursor:progress}.dashboard-stale .card{filter:saturate(.72)}.chart-nav button{min-width:36px}
+    @media(max-width:1180px){.stats{grid-template-columns:repeat(4,minmax(130px,1fr))}.market-head{align-items:flex-start}.market-tools{justify-content:flex-start}}
+    @media(max-width:760px){.wrap{padding:18px}.header{align-items:flex-start}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.market-tools{width:100%;justify-content:flex-start}.market-tools input{flex:1;min-width:135px}.market-tools select{flex:1;max-width:none}.controls button{flex:1}.candle-wrap{height:360px}}
+    @media(max-width:460px){.wrap{padding:13px}.brand-mark{width:40px;height:40px}.header-status{width:100%;justify-content:space-between}.stats{grid-template-columns:1fr 1fr}.metric-value{font-size:19px}.market-tools{display:grid;grid-template-columns:1fr 1fr}.market-tools input{grid-column:1/-1;width:100%}.market-tools button{grid-column:1/-1}.chart-controls{align-items:flex-start}.candle-wrap{height:300px}}
   </style>
 </head>
 <body>
 <div class="wrap">
   <div class="header">
-    <div><h1>Agentic Binance Bot</h1><div class="sub">Trading decisions, risk, performance and bot health in one place.</div></div>
-    <div id="modePill" class="mode-pill paper"><span class="dot"></span><span>PAPER</span></div>
+    <div class="brand-lockup">
+      <div class="brand-mark" aria-hidden="true">A</div>
+      <div>
+        <div class="eyebrow">MARKET OPERATIONS</div>
+        <h1>Agentic Binance Bot</h1>
+        <div class="sub">A clear, risk-first control room for your Spot portfolio.</div>
+      </div>
+    </div>
+    <div class="header-status">
+      <span class="badge badge-blue" id="universeBadge">MARKET UNIVERSE</span>
+      <div id="modePill" class="mode-pill paper"><span class="dot"></span><span>PAPER</span></div>
+    </div>
   </div>
 
   <div id="liveNotice" class="notice" style="display:none"></div>
 
   <div class="controls">
     <div class="focus-control"><label for="focusSymbol">Focus market</label><select id="focusSymbol" aria-label="Focused market"></select></div>
-    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/analyze','Running read-only market analysis…')">▶ Analyze Focus Market</button>
-    <button id="startBtn" class="b-green action" onclick="act('/bot/start','Starting all configured markets…')">● Start All Markets</button>
-    <button id="stopBtn" class="b-red action" onclick="act('/bot/stop','Stopping all configured markets…')">■ Stop All Markets</button>
-    <button class="b-gray action" onclick="loadAll(true)">↻ Refresh</button>
+    <button id="analyzeBtn" class="b-blue action" onclick="act('/bot/analyze','Running read-only market analysis…')">Analyze market</button>
+    <button id="analyzeAllBtn" class="b-gray action" onclick="act('/bot/analyze-all','Scanning every market — read-only…')">Scan all markets</button>
+    <button id="startBtn" class="b-green action" onclick="act('/bot/start','Discovering liquid markets and starting the portfolio…')">Start trading</button>
+    <button id="stopBtn" class="b-red action" onclick="act('/bot/stop','Stopping all markets…')">Stop trading</button>
+    <button class="b-gray action" onclick="loadAll(true,true)">Refresh dashboard</button>
   </div>
 
   <div class="grid stats">
@@ -75,14 +107,25 @@ DASHBOARD_HTML = r'''<!doctype html>
   <div class="card" style="margin-bottom:14px">
     <div class="market-head">
       <div>
-        <h2 style="margin-bottom:0">Multi-Symbol Signal Monitor</h2>
-        <div class="market-title-note">All configured markets are evaluated independently. Scores apply to BUY/SELL signals; HOLD means no new order signal. Open positions remain monitored for exits.</div>
+        <div class="eyebrow">UNIVERSE SCANNER</div>
+        <h2 style="margin-bottom:0">Market watchlist</h2>
+        <div class="market-title-note" id="universeSummary">Discovering the most liquid eligible Spot pairs.</div>
       </div>
-      <div class="chart-status"><span id="portfolioStatus">Portfolio —</span></div>
+      <div class="market-tools">
+        <input id="marketSearch" type="search" placeholder="Search symbol…" aria-label="Search markets">
+        <select id="marketFilter" aria-label="Filter markets">
+          <option value="all">All markets</option><option value="actionable">Actionable setups</option><option value="positions">Open positions</option><option value="blocked">Risk blocked</option>
+        </select>
+        <select id="marketSort" aria-label="Sort markets">
+          <option value="volume">Sort: liquidity</option><option value="score">Sort: strategy score</option><option value="change">Sort: 24h change</option><option value="symbol">Sort: symbol</option>
+        </select>
+        <button id="refreshUniverseBtn" class="b-gray action" type="button">Discover top markets</button>
+      </div>
     </div>
+    <div class="chart-status"><span id="portfolioStatus">Portfolio —</span></div>
     <div class="explain" id="portfolioEntryBlock"></div>
     <div class="explain" id="portfolioHoldings"></div>
-    <div class="table-wrap" id="symbolOverview"><span class="muted">Loading configured markets…</span></div>
+    <div class="table-wrap" id="symbolOverview"><span class="muted">Loading markets…</span></div>
   </div>
 
   <div class="card market-card">
@@ -194,6 +237,8 @@ function syncActionButtons(){
   if(!latestDashboard)return;
   const running=Boolean(latestDashboard.portfolio_running ?? latestDashboard.running);
   if($('analyzeBtn')){$('analyzeBtn').disabled=running;$('analyzeBtn').title=running?'Stop the automated bot before running read-only analysis':'Read-only analysis; this button never submits an order'}
+  if($('analyzeAllBtn')){$('analyzeAllBtn').disabled=running;$('analyzeAllBtn').title=running?'Stop the automated bot before scanning':'Read-only scan across every loaded market'}
+  if($('refreshUniverseBtn')){$('refreshUniverseBtn').disabled=running;$('refreshUniverseBtn').title=running?'Stop trading before changing the market universe':latestDashboard?.config?.universe_mode==='top_volume'?'Refresh eligible Spot markets ranked by 24-hour quote volume':'Reload the configured market watchlist'}
   if($('startBtn'))$('startBtn').disabled=running;
   if($('stopBtn'))$('stopBtn').disabled=!running;
 }
@@ -227,6 +272,7 @@ let candleRequestSeq=0;
 let candleController=null;
 let dashboardController=null;
 let lastDashboardSuccessAt=0;
+let universeAutoRefreshAttempted=false;
 
 function chartPrice(v){
   if(v===null||v===undefined||Number.isNaN(Number(v)))return '—';
@@ -393,6 +439,12 @@ async function act(url,msg){
   if(url==='/bot/start'&&latestDashboard?.config?.mode==='live'&&latestDashboard?.config?.live_orders_allowed){
     const ok=confirm('LIVE ORDERS ARE ENABLED. Starting the bot can use real funds. Continue?');
     if(!ok)return;
+  }else if(url==='/bot/start'&&latestDashboard?.config?.mode==='testnet'){
+    const dynamic=latestDashboard?.config?.universe_mode==='top_volume';
+    const count=(latestDashboard?.config?.symbols||[]).length;
+    const scope=dynamic?`up to ${latestDashboard?.config?.universe_max_symbols} volume-ranked markets, plus any pins or recovery markets`:`${count} configured markets`;
+    const ok=confirm(`Start Spot Testnet trading across ${scope}? This can submit orders using Testnet balances, not real funds.`);
+    if(!ok)return;
   }
   setLoading(true); $('updated').textContent=msg;
   try{const r=await fetch(url,{method:'POST'});const j=await r.json();if(!r.ok)throw new Error(j.detail||'Request failed');await loadAll(false,true)}
@@ -400,27 +452,81 @@ async function act(url,msg){
   finally{setLoading(false)}
 }
 
-function renderSymbolOverview(items,portfolio){
-  const rows=Array.isArray(items)?items:[];
-  if(!rows.length){
-    $('symbolOverview').innerHTML='<span class="muted">No configured markets.</span>';
-    return;
+async function refreshUniverse(silent=false){
+  if(latestDashboard?.portfolio_running){return}
+  const button=$('refreshUniverseBtn');
+  if(button)button.disabled=true;
+  if(!silent){$('updated').textContent='Discovering liquid Binance Spot markets…';setLoading(true)}
+  try{
+    const r=await fetch('/bot/universe/refresh',{method:'POST'});
+    const result=await r.json();
+    if(!r.ok)throw new Error(result.detail||'Market discovery failed');
+    if(result.symbols?.length&&!result.symbols.includes(focusSymbol))focusSymbol=result.symbols[0];
+    await loadAll(false,true);
+    await loadCandles(true);
+    $('updated').textContent=`Universe refreshed · ${(result.symbols||[]).length} markets`;
+  }catch(e){
+    $('liveNotice').style.display='block';
+    $('liveNotice').textContent='Market discovery warning: '+e.message;
+    $('updated').textContent='Universe refresh failed';
+  }finally{
+    if(!silent)setLoading(false);
+    syncActionButtons();
   }
-  $('portfolioStatus').textContent=`Bot open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · portfolio equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available quote ${money(portfolio?.available_quote)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
-  $('portfolioEntryBlock').textContent=rows.every(item=>!item.running)?'Trading engines are stopped. Click Start All Markets to enable strategy cycles in the displayed mode. Starting the server alone does not start trading.':portfolio?.entry_block_reason||'Exposure headroom: '+money(portfolio?.exposure_headroom)+'. A valid BUY setup and all other risk checks are still required.';
+}
+
+function renderSymbolOverview(items,portfolio,universe){
+  const rows=Array.isArray(items)?items:[];
+  const dynamic=universe?.mode==='top_volume';
+  const universeTitle=dynamic?'TOP 24H VOLUME':'CONFIGURED WATCHLIST';
+  $('universeBadge').textContent=universeTitle;
+  $('refreshUniverseBtn').textContent=dynamic?'Discover top markets':'Refresh watchlist';
+  $('universeSummary').textContent=dynamic
+    ? `${rows.length} eligible Spot markets · ranked by 24h ${quoteAsset} turnover${universe?.refreshed_at?' · refreshed '+new Date(universe.refreshed_at).toLocaleTimeString():''}${universe?.error?' · '+universe.error:''}`
+    : `${rows.length} configured markets · entries remain subject to portfolio risk gates`;
+  $('portfolioStatus').textContent=`Open positions ${portfolio?.open_positions??0} / ${portfolio?.max_concurrent_positions??'—'} · equity ${money(portfolio?.equity)} · exposure ${pct(portfolio?.exposure_fraction)} / ${pct(portfolio?.max_exposure_fraction)} · available ${money(portfolio?.available_quote)} · daily P/L ${money(portfolio?.daily_realized_pnl)}${portfolio?.error?' · '+portfolio.error:''}`;
+  $('portfolioEntryBlock').textContent=rows.every(item=>!item.running)?'Trading engines are stopped. Discover the universe, scan setups read-only, then explicitly start trading in the selected mode.':portfolio?.entry_block_reason||'Exposure headroom: '+money(portfolio?.exposure_headroom)+'. A valid BUY setup and every other risk check are still required.';
   const holdings=Array.isArray(portfolio?.holdings)?portfolio.holdings:[];
   $('portfolioHoldings').textContent=portfolio?.equity==null
     ? 'Account holdings valuation is unavailable. '+(portfolio?.error||'Waiting for fresh balances and prices.')
     : `Configured-coin holdings: bot positions ${money(portfolio?.managed_exposure)}; outside bot positions ${money(portfolio?.unmanaged_exposure)}. Both count toward the account exposure limit. `+
       (holdings.length?holdings.map(h=>`${h.symbol}: ${num(h.quantity,8)} total, ${num(h.unmanaged_quantity,8)} outside bot positions`).join(' | '):'No holdings in configured coins.');
-  const body=rows.map(item=>{
+
+  const query=String($('marketSearch')?.value||'').trim().toUpperCase();
+  const filter=$('marketFilter')?.value||'all';
+  const sort=$('marketSort')?.value||'volume';
+  let visible=rows.filter(item=>{
+    if(query&&!String(item.symbol||'').includes(query))return false;
+    if(filter==='actionable'&&item.signal!=='BUY'&&item.signal!=='SELL')return false;
+    if(filter==='positions'&&!item.open_position)return false;
+    if(filter==='blocked'&&item.risk_allowed!==false)return false;
+    return true;
+  });
+  visible.sort((a,b)=>{
+    if(sort==='score')return Number(b.confidence||0)-Number(a.confidence||0);
+    if(sort==='change')return Math.abs(Number(b.price_change_percent||0))-Math.abs(Number(a.price_change_percent||0));
+    if(sort==='symbol')return String(a.symbol).localeCompare(String(b.symbol));
+    return Number(b.quote_volume||0)-Number(a.quote_volume||0);
+  });
+  if(!rows.length){
+    $('symbolOverview').innerHTML='<div class="table-empty">No markets loaded. Discover a liquid universe or configure symbols.</div>';
+    return;
+  }
+  if(!visible.length){
+    $('symbolOverview').innerHTML='<div class="table-empty">No markets match the current search and filters.</div>';
+    return;
+  }
+  const body=visible.map(item=>{
     const risk=item.open_position?badge('MANAGING','blue'):item.risk_allowed===true?badge('ALLOWED','green'):item.risk_allowed===false?badge('BLOCKED','red'):badge('WAITING','amber');
     const actionable=item.signal==='BUY'||item.signal==='SELL';
-    const score=actionable&&item.confidence!=null?num(Number(item.confidence)*100,1)+'/100':item.open_position?'Holding position':'No entry setup';
-    const status=item.error?badge('ERROR','red'):item.running?badge('RUNNING','green'):badge('STOPPED','amber');
-    return `<tr><td><b>${esc(item.symbol)}</b></td><td>${sideBadge(item.signal)}</td><td>${score}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price===null||item.price===undefined?'—':num(item.price,4)}</td><td>${status}</td></tr>`;
+    const score=actionable&&item.confidence!=null?num(Number(item.confidence)*100,1)+'/100':item.open_position?'Position open':'—';
+    const status=item.error?badge('REVIEW','red'):item.running?badge('SCANNING','green'):badge('READY','amber');
+    const volume=item.quote_volume==null?'—':money(item.quote_volume);
+    const change=item.price_change_percent==null?'—':`<span class="${cls(item.price_change_percent)}">${Number(item.price_change_percent)>0?'+':''}${num(item.price_change_percent,2)}%</span>`;
+    const marketMark=item.pinned?'PIN':item.universe_rank?`#${item.universe_rank}`:item.tracked?'TRACKED':'—';
+    return `<tr data-symbol="${esc(item.symbol)}"><td><div class="market-symbol"><span class="market-rank">${marketMark}</span><b>${esc(item.symbol)}</b></div><div class="metric-note">${esc(item.base_asset||'')}${item.tracked?' · retained for recovery':''}</div></td><td class="market-volume">${volume}</td><td class="market-change">${change}</td><td>${sideBadge(item.signal)}</td><td>${score}</td><td>${risk}</td><td>${item.open_position?badge('OPEN','blue'):'—'}</td><td>${item.price==null?'—':chartPrice(item.price)}</td><td>${status}</td></tr>`;
   }).join('');
-  $('symbolOverview').innerHTML=`<table><thead><tr><th>Market</th><th>Signal</th><th>Strategy score</th><th>Entry Gate</th><th>Position</th><th>Price</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`;
+  $('symbolOverview').innerHTML=`<table><thead><tr><th>Market</th><th>24h turnover</th><th>24h change</th><th>Signal</th><th>Strategy score</th><th>Entry gate</th><th>Position</th><th>Last price</th><th>Engine</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function renderDecision(cycle){
@@ -438,7 +544,7 @@ function renderDecision(cycle){
     <div class="explain"><b>Why:</b> ${esc(s.reason)}</div>
     <div>${Object.entries(s.entry_checks||{}).map(([name,passed])=>row(esc(name),passed?badge('PASS','green'):badge('BLOCKED','amber'))).join('')}</div>
     ${s.side==='BUY'?'<div class="explain"><b>Entry score calculation:</b> '+Object.entries(s.score_components||{}).map(([name,value])=>esc(name)+': '+num(value*100,2)).join(' + ')+' points before score cap or advisor adjustment.</div>':''}
-    <div style="margin-top:10px">${row('RSI',num(f.rsi,2))}${row('Fast EMA',num(f.ema_fast,2))}${row('Slow EMA',num(f.ema_slow,2))}${row('5-candle momentum',pct(f.momentum_5))}${row('Volume ratio',num(f.volume_ratio,2)+'×')}${row('ATR / volatility',pct(f.atr_pct))}</div>`;
+    <div style="margin-top:10px">${row('RSI',num(f.rsi,2))}${row('Fast EMA',num(f.ema_fast,2))}${row('Slow EMA',num(f.ema_slow,2))}${row('5-candle momentum',pct(f.momentum_5))}${row('ADX trend strength',num(f.adx,1))}${row('Directional pressure',`+DI ${num(f.plus_di,1)} / −DI ${num(f.minus_di,1)}`)}${row('Volume ratio',num(f.volume_ratio,2)+'×')}${row('ATR / volatility',pct(f.atr_pct))}</div>`;
 }
 
 function renderRisk(cycle){
@@ -502,7 +608,7 @@ function drawChart(curve){
 
 function renderConfig(d){
   const c=d.config;window.cfg=c;
-  $('config').innerHTML=`${row('Mode',badge(c.mode.toUpperCase(),c.mode==='live'?'red':c.mode==='testnet'?'amber':'blue'))}${row('Configured markets',esc((c.symbols||[c.symbol]).join(', ')))}${row('Max concurrent positions',c.max_concurrent_positions??1)}${row('Pair / strategy candle',`${esc(c.symbol)} · ${esc(c.interval)}`)}${row('Market / risk monitor',`Every ${c.cycle_seconds}s`)}${row('Price stream',c.use_websocket_market_data?badge('WEBSOCKET','green'):badge('REST','amber'))}${row('Strategy timing',`New completed ${esc(c.interval)} candle`)}${row('Account refresh',`Every ${c.account_refresh_seconds}s in testnet/live`)}${row('Paper slippage model',`${num(c.paper_slippage_bps,1)} bps per fill`)}${row('Risk per trade',pct(c.risk_per_trade))}${row('Max position allocation',pct(c.max_position_fraction))}${row('Daily loss stop',pct(c.max_daily_loss_fraction))}${row('Stop loss',pct(c.stop_loss_pct))}${row('Take profit',pct(c.take_profit_pct))}${row('Trailing protection',c.enable_trailing_stop?badge('ON','green'):badge('OFF','amber'))}${row('Breakeven activation',pct(c.breakeven_activation_pct))}${row('Trailing activation / distance',`${pct(c.trailing_stop_activation_pct)} / ${pct(c.trailing_stop_distance_pct)}`)}${row('Base signal threshold',pct(c.min_signal_confidence))}${row('Adaptive learning',c.adaptive_learning?badge('ON','green'):badge('OFF','amber'))}${row('LLM advisor',c.llm_advisor?badge('ON','blue'):badge('OFF','amber'))}${row('Live orders',c.live_orders_allowed?badge('ENABLED','red'):badge('BLOCKED','green'))}`;
+  $('config').innerHTML=`${row('Mode',badge(c.mode.toUpperCase(),c.mode==='live'?'red':c.mode==='testnet'?'amber':'blue'))}${row('Universe mode',c.universe_mode==='top_volume'?badge('TOP 24H VOLUME','blue'):badge('CONFIGURED','amber'))}${row('Markets loaded',esc((c.symbols||[c.symbol]).join(', ')))}${row('Universe target',c.universe_mode==='top_volume'?`${c.universe_max_symbols} pairs · min ${money(c.universe_min_quote_volume)} 24h turnover`:'Manual symbol list')}${row('Max concurrent positions',c.max_concurrent_positions??1)}${row('Pair / strategy candle',`${esc(c.symbol)} · ${esc(c.interval)}`)}${row('Market / risk monitor',`Every ${c.cycle_seconds}s`)}${row('Price stream',c.use_websocket_market_data?badge('WEBSOCKET','green'):badge('REST','amber'))}${row('Strategy timing',`New completed ${esc(c.interval)} candle`)}${row('Account refresh',`Every ${c.account_refresh_seconds}s in testnet/live`)}${row('Paper slippage model',`${num(c.paper_slippage_bps,1)} bps per fill`)}${row('Risk per trade',pct(c.risk_per_trade))}${row('Max position allocation',pct(c.max_position_fraction))}${row('Daily loss stop',pct(c.max_daily_loss_fraction))}${row('Stop loss',pct(c.stop_loss_pct))}${row('Take profit',pct(c.take_profit_pct))}${row('Trailing protection',c.enable_trailing_stop?badge('ON · SOFTWARE','amber'):badge('OFF','amber'))}${row('Breakeven activation',pct(c.breakeven_activation_pct))}${row('Trailing activation / distance',`${pct(c.trailing_stop_activation_pct)} / ${pct(c.trailing_stop_distance_pct)}`)}${row('Base signal threshold',pct(c.min_signal_confidence))}${row('ADX trend filter',num(c.strategy_min_adx,1))}${row('Adaptive learning',c.adaptive_learning?badge('ON','green'):badge('OFF','amber'))}${row('LLM advisor',c.llm_advisor?badge('ON · VETO ONLY','blue'):badge('OFF','amber'))}${row('Live orders',c.live_orders_allowed?badge('ENABLED','red'):badge('BLOCKED','green'))}`;
 }
 
 async function loadAll(showLoading=false,force=false){
@@ -561,7 +667,7 @@ async function loadAll(showLoading=false,force=false){
     const pf=d.performance.profit_factor;$('profitFactor').textContent='Profit factor '+(pf===null?'—':(!Number.isFinite(Number(pf))?'∞':num(pf,2)));
     const signalClose=Number(d.last_cycle?.signal_candle_close_time);
     $('strategyCandleStatus').textContent=Number.isFinite(signalClose)?'Strategy candle '+new Date(signalClose).toLocaleString():'Strategy candle —';
-    renderConfig(d);renderSymbolOverview(d.symbol_overview,d.portfolio);renderDecision(d.last_cycle);renderRisk(d.last_cycle);renderExecution(d.last_execution);renderPosition(d);renderLearning(d.learning);renderPerformance(d.performance);renderTrades(d.trades);drawChart(d.performance.equity_curve);$('raw').textContent=JSON.stringify(d.last_cycle,null,2);
+    renderConfig(d);renderSymbolOverview(d.symbol_overview,d.portfolio,d.universe);renderDecision(d.last_cycle);renderRisk(d.last_cycle);renderExecution(d.last_execution);renderPosition(d);renderLearning(d.learning);renderPerformance(d.performance);renderTrades(d.trades);drawChart(d.performance.equity_curve);$('raw').textContent=JSON.stringify(d.last_cycle,null,2);
     $('updated').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){
     if(e.name!=='AbortError'&&requestSeq===dashboardRequestSeq){
@@ -577,6 +683,11 @@ async function loadAll(showLoading=false,force=false){
   }
 }
 $('focusSymbol').addEventListener('change',()=>{focusSymbol=$('focusSymbol').value;loadAll(true,true).then(()=>loadCandles(true));});
+$('marketSearch').addEventListener('input',()=>{if(latestDashboard)renderSymbolOverview(latestDashboard.symbol_overview,latestDashboard.portfolio,latestDashboard.universe)});
+$('marketFilter').addEventListener('change',()=>{if(latestDashboard)renderSymbolOverview(latestDashboard.symbol_overview,latestDashboard.portfolio,latestDashboard.universe)});
+$('marketSort').addEventListener('change',()=>{if(latestDashboard)renderSymbolOverview(latestDashboard.symbol_overview,latestDashboard.portfolio,latestDashboard.universe)});
+$('symbolOverview').addEventListener('click',ev=>{const row=ev.target.closest('tr[data-symbol]');if(!row)return;focusSymbol=row.dataset.symbol;$('focusSymbol').value=focusSymbol;loadAll(true,true).then(()=>loadCandles(true));});
+$('refreshUniverseBtn').addEventListener('click',()=>refreshUniverse(false));
 $('candleInterval').addEventListener('change',()=>{candleFollowLatest=true;candleViewEnd=0;loadCandles(true)});
 $('candleCount').addEventListener('change',()=>{candleFollowLatest=true;candleViewEnd=0;candleViewCount=Math.min(60,Number($('candleCount').value||60));loadCandles(true)});
 $('chartRefresh').addEventListener('click',()=>loadCandles(true));
@@ -593,7 +704,14 @@ function endCandleDrag(ev){candleDragStartX=null;candleDragStartEnd=null;$('cand
 $('candleWrap').addEventListener('pointerup',endCandleDrag);
 $('candleWrap').addEventListener('pointercancel',endCandleDrag);
 $('candleWrap').addEventListener('mouseleave',()=>{if(candleDragStartX===null){candleHoverIndex=null;$('candleTooltip').style.display='none';drawCandles()}});
-loadAll(true,true).then(()=>{if(latestDashboard?.config?.interval&&$('candleInterval').querySelector(`option[value="${latestDashboard.config.interval}"]`))$('candleInterval').value=latestDashboard.config.interval;loadCandles(true)});
+loadAll(true,true).then(async()=>{
+  if(latestDashboard?.config?.universe_mode==='top_volume'&&!latestDashboard?.universe?.ready&&!universeAutoRefreshAttempted){
+    universeAutoRefreshAttempted=true;
+    await refreshUniverse(true);
+  }
+  if(latestDashboard?.config?.interval&&$('candleInterval').querySelector(`option[value="${latestDashboard.config.interval}"]`))$('candleInterval').value=latestDashboard.config.interval;
+  loadCandles(true);
+});
 setInterval(()=>loadAll(false,false),1000);setInterval(()=>loadCandles(false),5000);setInterval(()=>{if(lastDashboardSuccessAt&&Date.now()-lastDashboardSuccessAt>5000)markDashboardStale('No successful dashboard update for more than 5 seconds')},1000);window.addEventListener('resize',()=>{drawChart(latestDashboard?.performance?.equity_curve||[]);drawCandles()});
 </script>
 </body></html>'''

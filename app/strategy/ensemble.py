@@ -8,10 +8,17 @@ from app.strategy.indicators import enrich
 class EnsembleStrategy:
     """A transparent baseline ensemble: trend + momentum + RSI + volume/volatility context."""
 
-    def __init__(self, min_volume_ratio: float = 0.75, max_extension_atr: float = 2.0, min_trend_atr: float = 0.25):
+    def __init__(
+        self,
+        min_volume_ratio: float = 0.75,
+        max_extension_atr: float = 2.0,
+        min_trend_atr: float = 0.25,
+        min_adx: float = 16.0,
+    ):
         self.min_trend_atr = min_trend_atr
         self.min_volume_ratio = min_volume_ratio
         self.max_extension_atr = max_extension_atr
+        self.min_adx = min_adx
 
     def evaluate(self, raw_df: pd.DataFrame, has_position: bool) -> StrategySignal:
         columns = ["open", "high", "low", "close", "volume"]
@@ -42,6 +49,10 @@ class EnsembleStrategy:
         momentum = float(x.momentum_5)
         volume_ratio = float(x.volume_ratio)
         atr_pct = float(x.atr_pct)
+        adx = float(x.adx)
+        plus_di = float(x.plus_di)
+        minus_di = float(x.minus_di)
+        slow_ema_slope = float(x.ema_slow_slope_5)
         rsi = float(x.rsi)
 
         bullish = x.ema_fast > x.ema_slow and x.close > x.ema_fast and momentum > 0
@@ -56,6 +67,10 @@ class EnsembleStrategy:
             "momentum_5": momentum,
             "volume_ratio": volume_ratio,
             "atr_pct": atr_pct,
+            "adx": adx,
+            "plus_di": plus_di,
+            "minus_di": minus_di,
+            "ema_slow_slope_5": slow_ema_slope,
             "trend_strength": float(trend_strength),
             "trend_separation_atr": float((x.ema_fast - x.ema_slow) / x.atr) if x.atr > 0 else 0.0,
         }
@@ -66,6 +81,9 @@ class EnsembleStrategy:
             "Positive 5-candle momentum": momentum > 0,
             "RSI between 43 and 70": 43 <= rsi <= 70,
             "Sufficient EMA separation": features["trend_separation_atr"] >= self.min_trend_atr,
+            "ADX confirms a trending market": adx >= self.min_adx,
+            "Positive directional movement": plus_di > minus_di,
+            "Medium-term EMA slope is positive": slow_ema_slope > 0,
             "Sufficient relative volume": volume_ratio >= self.min_volume_ratio,
             "Price not overextended": bool(x.atr > 0 and (x.close - x.ema_fast) <= self.max_extension_atr * x.atr),
         }
@@ -73,6 +91,12 @@ class EnsembleStrategy:
         if not has_position and bullish and 43 <= rsi <= 70:
             if features["trend_separation_atr"] < self.min_trend_atr:
                 return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak EMA trend separation", features, entry_checks=checks)
+            if adx < self.min_adx:
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: ADX shows a weak or choppy trend", features, entry_checks=checks)
+            if plus_di <= minus_di:
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: bearish directional pressure", features, entry_checks=checks)
+            if slow_ema_slope <= 0:
+                return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: medium-term trend is not rising", features, entry_checks=checks)
             if volume_ratio < self.min_volume_ratio:
                 return StrategySignal(SignalSide.HOLD, 0.0, "Entry blocked: weak relative volume", features, entry_checks=checks)
             if x.atr <= 0 or (x.close - x.ema_fast) > self.max_extension_atr * x.atr:
@@ -81,6 +105,8 @@ class EnsembleStrategy:
                 "Base qualifying setup": 0.55,
                 "EMA strength": min(abs(trend_strength) * 35, 0.12),
                 "Momentum": min(max(momentum, 0) * 8, 0.10),
+                "ADX trend quality": min(max(adx - self.min_adx, 0) * 0.002, 0.08),
+                "Medium-term slope": min(max(slow_ema_slope, 0) * 40, 0.08),
                 "Volume bonus": 0.05 if volume_ratio > 1.05 else 0.0,
                 "Fresh crossover bonus": 0.08 if fresh_bull_cross else 0.0,
                 "High volatility penalty": -0.08 if atr_pct > 0.04 else 0.0,

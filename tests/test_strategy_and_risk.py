@@ -128,12 +128,16 @@ def test_weak_crossover_is_blocked_without_suppressing_established_trend():
     shift = np.arange(len(candles)) * .025
     for column in ["open", "high", "low", "close"]:
         candles[column] -= shift
-    assert EnsembleStrategy(min_trend_atr=0).evaluate(candles, False).side == SignalSide.BUY
+    weak = EnsembleStrategy(min_trend_atr=0).evaluate(candles, False)
+    assert weak.side == SignalSide.HOLD
+    assert "ADX" in weak.reason or "medium-term" in weak.reason
     signal = EnsembleStrategy().evaluate(candles, False)
     assert signal.side == SignalSide.HOLD
     assert "trend separation" in signal.reason
     assert 0 < signal.features["trend_separation_atr"] < .25
-    assert EnsembleStrategy().evaluate(quality_candles(), False).side == SignalSide.BUY
+    established = EnsembleStrategy().evaluate(quality_candles(), False)
+    assert established.side == SignalSide.BUY
+    assert established.features["adx"] >= 16
 
 
 def test_indicator_values_match_independent_recursive_calculation():
@@ -178,6 +182,8 @@ def test_buy_score_components_sum_to_reported_score():
     assert signal.confidence == pytest.approx(min(.95, max(0, sum(signal.score_components.values()))))
     f = signal.features
     expected = .55 + min(abs(f["trend_strength"]) * 35, .12) + min(max(f["momentum_5"], 0) * 8, .10)
+    expected += min(max(f["adx"] - 16, 0) * .002, .08)
+    expected += min(max(f["ema_slow_slope_5"], 0) * 40, .08)
     expected += .05 if f["volume_ratio"] > 1.05 else 0
     expected += signal.score_components["Fresh crossover bonus"]
     expected -= .08 if f["atr_pct"] > .04 else 0

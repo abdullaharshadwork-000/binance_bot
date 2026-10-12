@@ -790,3 +790,51 @@ class TradingDB:
 
     def has_unresolved_order(self, *, mode: str, symbol: str) -> bool:
         return bool(self.unresolved_orders(mode=mode, symbol=symbol))
+
+    def save_trading_universe(self, *, mode: str, symbols: list[str]) -> None:
+        """Persist the last selected market set for operational tools after restarts."""
+        self.set_state(f"trading_universe:{mode}", json.dumps(list(dict.fromkeys(symbols))))
+
+    def saved_trading_universe(self, *, mode: str) -> list[str]:
+        raw = self.get_state(f"trading_universe:{mode}")
+        if not raw:
+            return []
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(decoded, list):
+            return []
+        return list(dict.fromkeys(
+            str(symbol).strip().upper() for symbol in decoded if str(symbol).strip()
+        ))
+
+    def trade_symbols(self, *, mode: str) -> list[str]:
+        """Return markets represented in either the trade or order ledger."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT symbol FROM trades WHERE mode=? UNION SELECT symbol FROM orders WHERE mode=?",
+                (mode, mode),
+            ).fetchall()
+        return list(dict.fromkeys(str(row["symbol"]) for row in rows if row["symbol"]))
+
+    def tracked_symbols(self, *, mode: str) -> list[str]:
+        """Symbols that must stay in a dynamic universe for position/order recovery."""
+        with self.connection() as conn:
+            positions = conn.execute(
+                "SELECT DISTINCT symbol FROM trades WHERE mode=? AND status='OPEN'",
+                (mode,),
+            ).fetchall()
+            pending = conn.execute(
+                """
+                SELECT DISTINCT symbol FROM orders
+                WHERE mode=?
+                  AND (status NOT IN ('FILLED','CANCELED','REJECTED','EXPIRED','EXPIRED_IN_MATCH')
+                       OR (executed_quantity>0 AND ledger_applied=0))
+                """,
+                (mode,),
+            ).fetchall()
+        return list(dict.fromkeys(
+            str(row["symbol"]) for row in [*positions, *pending]
+            if row["symbol"]
+        ))

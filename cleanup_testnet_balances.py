@@ -21,7 +21,21 @@ async def build_cleanup_plan(settings: Settings, db: TradingDB) -> tuple[list[di
     if settings.allow_multi_symbol_live:
         raise RuntimeError("Refusing cleanup: ALLOW_MULTI_SYMBOL_LIVE must be false")
 
-    for symbol in settings.trading_symbols:
+    if settings.universe_mode == "top_volume":
+        symbols = list(dict.fromkeys([
+            *settings.configured_symbols,
+            *db.saved_trading_universe(mode=settings.mode),
+            *db.tracked_symbols(mode=settings.mode),
+        ]))
+        if not symbols:
+            raise RuntimeError(
+                "Refusing cleanup: no dynamic universe is recorded. Refresh the "
+                "Testnet dashboard universe first, then review the cleanup plan."
+            )
+    else:
+        symbols = settings.trading_symbols
+
+    for symbol in symbols:
         if db.get_open_trade(symbol, settings.mode) is not None:
             raise RuntimeError(f"Refusing cleanup: local open position exists for {symbol}")
         unresolved = db.unresolved_orders(mode=settings.mode, symbol=symbol)
@@ -34,7 +48,7 @@ async def build_cleanup_plan(settings: Settings, db: TradingDB) -> tuple[list[di
     clients.append(primary)
 
     open_orders = await primary.open_orders()
-    configured = set(settings.trading_symbols)
+    configured = set(symbols)
     blocking = [order for order in open_orders if str(order.get("symbol") or "") in configured]
     if blocking:
         compact = [{
@@ -47,7 +61,7 @@ async def build_cleanup_plan(settings: Settings, db: TradingDB) -> tuple[list[di
         raise RuntimeError("Refusing cleanup: configured-symbol Binance open orders exist: " + json.dumps(compact))
 
     plan: list[dict] = []
-    for symbol in settings.trading_symbols:
+    for symbol in symbols:
         base_asset = settings.base_for_symbol(symbol)
         if not base_asset:
             raise RuntimeError(f"Could not derive base asset for {symbol}")
@@ -168,8 +182,8 @@ async def async_main(auto_yes: bool) -> int:
             "action": "TESTNET_BALANCE_CLEANUP",
             "plan": printable_plan(plan),
             "note": (
-                "This utility only sells configured Testnet base-asset balances "
-                f"({', '.join(settings.trading_symbols)}) to {settings.quote_asset}."
+                "This utility only sells selected/previously tracked Testnet base-asset balances "
+                f"({', '.join(item['symbol'] for item in plan)}) to {settings.quote_asset}."
             ),
         }, indent=2))
 

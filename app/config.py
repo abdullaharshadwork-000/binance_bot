@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = Field(default=2, ge=1, le=10)
     allow_multi_symbol_live: bool = False
 
+    # Discover a bounded, liquidity-ranked Spot universe instead of requiring a
+    # permanently hard-coded SYMBOLS list. SYMBOLS and UNIVERSE_PINNED_SYMBOLS
+    # remain optional manual inclusions when top_volume mode is selected.
+    universe_mode: Literal["configured", "top_volume"] = "configured"
+    universe_max_symbols: int = Field(default=15, ge=1, le=30)
+    universe_min_quote_volume: float = Field(default=1_000_000.0, ge=0)
+    universe_refresh_minutes: int = Field(default=60, ge=5, le=1440)
+    universe_pinned_symbols: str = ""
+    universe_excluded_bases: str = "USDC,BUSD,FDUSD,TUSD,USDP,DAI,USDE,USDD,USD1"
+
     interval: str = "15m"
 
     # Fast market/risk loop. Strategy still uses completed candles only.
@@ -57,6 +67,7 @@ class Settings(BaseSettings):
     trailing_stop_distance_pct: float = Field(default=0.008, gt=0, le=0.10)
     breakeven_activation_pct: float = Field(default=0.006, gt=0, le=0.20)
     strategy_min_trend_atr: float = Field(default=0.25, ge=0, le=5)
+    strategy_min_adx: float = Field(default=16.0, ge=0, le=60)
     max_consecutive_losses: int = Field(default=3, ge=1, le=20)
     loss_streak_pause_seconds: float = Field(default=3600, ge=0, le=86400)
     strategy_min_volume_ratio: float = Field(default=0.75, ge=0, le=5)
@@ -84,9 +95,18 @@ class Settings(BaseSettings):
         self.base_asset = self.base_asset.strip().upper()
         self.quote_asset = self.quote_asset.strip().upper()
         self.interval = self.interval.strip()
+        self.universe_mode = self.universe_mode.strip().lower()
+        self.universe_excluded_bases = self.universe_excluded_bases.strip().upper()
         parsed_symbols = self.trading_symbols
         if not parsed_symbols:
             raise ValueError("At least one trading symbol is required")
+        if self.universe_mode == "top_volume":
+            for symbol in [*self.configured_symbols, *self.pinned_trading_symbols]:
+                if self.base_for_symbol(symbol) is None:
+                    raise ValueError(
+                        f"Pinned universe symbol {symbol} must end with "
+                        f"QUOTE_ASSET={self.quote_asset}"
+                    )
         if self.account_max_age_seconds < self.account_refresh_seconds:
             raise ValueError("ACCOUNT_MAX_AGE_SECONDS must cover ACCOUNT_REFRESH_SECONDS")
 
@@ -117,7 +137,15 @@ class Settings(BaseSettings):
                     f"Multi-symbol entry {symbol} must end with QUOTE_ASSET={self.quote_asset}"
                 )
 
-        if len(parsed_symbols) > 1 and self.mode == "live" and not self.allow_multi_symbol_live:
+        dynamic_multi_symbol = self.universe_mode == "top_volume" and (
+            self.universe_max_symbols > 1
+            or bool(self.configured_symbols or self.pinned_trading_symbols)
+        )
+        if (
+            self.mode == "live"
+            and (len(parsed_symbols) > 1 or dynamic_multi_symbol)
+            and not self.allow_multi_symbol_live
+        ):
             raise ValueError(
                 "Multi-symbol live trading is blocked. Keep ALLOW_MULTI_SYMBOL_LIVE=false "
                 "until the multi-symbol engine has been validated in Testnet."
@@ -151,6 +179,30 @@ class Settings(BaseSettings):
             result.append(symbol)
             seen.add(symbol)
         return result
+
+    @staticmethod
+    def _parse_symbol_list(raw: str) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in raw.split(","):
+            symbol = value.strip().upper()
+            if symbol and symbol not in seen:
+                result.append(symbol)
+                seen.add(symbol)
+        return result
+
+    @property
+    def configured_symbols(self) -> list[str]:
+        """Explicit legacy SYMBOLS entries, used as pins in dynamic mode."""
+        return self._parse_symbol_list(self.symbols)
+
+    @property
+    def pinned_trading_symbols(self) -> list[str]:
+        return self._parse_symbol_list(self.universe_pinned_symbols)
+
+    @property
+    def excluded_base_assets(self) -> set[str]:
+        return set(self._parse_symbol_list(self.universe_excluded_bases))
 
     def base_for_symbol(self, symbol: str) -> str | None:
         symbol = symbol.strip().upper()
