@@ -1,15 +1,47 @@
 import argparse
 import asyncio
 import json
+import math
 import sys
+from decimal import Decimal, InvalidOperation
 
 from app.config import Settings
 from app.exchange.binance import BinanceClient
+from app.execution.broker import Broker
 from app.storage.db import TradingDB
 
 
 def _item(name: str, ok: bool, detail: str) -> dict:
     return {"check": name, "ok": bool(ok), "detail": detail}
+
+
+def _unconfigured_account_assets(account: dict, settings: Settings, symbols: list[str]):
+    balances = account.get("balances") if isinstance(account, dict) else None
+    if not isinstance(balances, list):
+        return [], "Signed account response omitted its balances list"
+    configured_assets = {
+        settings.base_for_symbol(symbol) for symbol in symbols
+    }
+    configured_assets.discard(None)
+    configured_assets.add(settings.quote_asset)
+    totals: dict[str, Decimal] = {}
+    for row in balances:
+        if not isinstance(row, dict):
+            return [], "Signed account response contains an invalid balance row"
+        asset = str(row.get("asset") or "").strip().upper()
+        if not asset:
+            return [], "Signed account balance row is missing its asset identifier"
+        if asset in configured_assets:
+            continue
+        try:
+            total = Decimal(str(row.get("free") or "0")) + Decimal(str(row.get("locked") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            return [], f"Could not parse the {asset} account balance"
+        if not total.is_finite() or total < 0:
+            return [], f"Invalid free/locked quantity for account asset {asset}"
+        if total > 0:
+            totals[asset] = totals.get(asset, Decimal("0")) + total
+    return [{"asset": asset, "quantity": float(amount)} for asset, amount in sorted(totals.items())], None
 
 
 async def run_readiness_check() -> dict:
@@ -82,6 +114,11 @@ async def run_readiness_check() -> dict:
         )
 
     exchange = BinanceClient(settings)
+    protection_inspector = (
+        Broker(settings, exchange, db)
+        if settings.mode in {"testnet", "live"}
+        else None
+    )
     try:
         await exchange.ping()
         checks.append(_item("binance_api_reachable", True, "ping succeeded"))
@@ -94,6 +131,65 @@ async def run_readiness_check() -> dict:
                 "signed account query succeeded",
             )
         )
+
+        other_assets, balance_error = _unconfigured_account_assets(
+            account, settings, symbols
+        )
+        if balance_error:
+            checks.append(_item("other_account_assets_valued", False, balance_error))
+        elif not other_assets:
+            checks.append(
+                _item(
+                    "other_account_assets_valued",
+                    True,
+                    "no non-quote balances outside the selected universe",
+                )
+            )
+        else:
+            try:
+                pairs = await exchange.asset_quote_conversion_pairs(
+                    [item["asset"] for item in other_assets], settings.quote_asset
+                )
+                missing_assets = [
+                    item["asset"] for item in other_assets if item["asset"] not in pairs
+                ]
+                if missing_assets:
+                    raise RuntimeError(
+                        "No active direct/inverse Spot quote pair for: "
+                        + ", ".join(missing_assets)
+                    )
+                prices = await exchange.ticker_prices(
+                    list(dict.fromkeys(item["symbol"] for item in pairs.values()))
+                )
+                valuations = []
+                for item in other_assets:
+                    pair = pairs[item["asset"]]
+                    price = prices.get(pair["symbol"])
+                    if price is None or not math.isfinite(price) or price <= 0:
+                        raise RuntimeError(
+                            f"Fresh {settings.quote_asset} price unavailable for {item['asset']}"
+                        )
+                    value = (
+                        item["quantity"] / price
+                        if pair["inverse"]
+                        else item["quantity"] * price
+                    )
+                    if not math.isfinite(value) or value < 0:
+                        raise RuntimeError(
+                            f"Invalid quote valuation for {item['asset']}"
+                        )
+                    valuations.append(
+                        f"{item['asset']}={value:.8g} {settings.quote_asset}"
+                    )
+                checks.append(
+                    _item(
+                        "other_account_assets_valued",
+                        True,
+                        "; ".join(valuations),
+                    )
+                )
+            except Exception as exc:
+                checks.append(_item("other_account_assets_valued", False, str(exc)))
 
         open_orders = await exchange.open_orders()
         configured = set(symbols)
@@ -155,11 +251,18 @@ async def run_readiness_check() -> dict:
             if not list_client_id:
                 continue
 
-            try:
-                order_list = await exchange.get_order_list(
-                    symbol,
-                    list_client_order_id=str(list_client_id),
+            if protection_inspector is None:
+                checks.append(
+                    _item(
+                        f"{symbol}_exchange_protection_query",
+                        False,
+                        "exchange OCO inspection is only available in Testnet/live mode",
+                    )
                 )
+                continue
+
+            try:
+                protection = await protection_inspector.inspect_exchange_protection(trade)
             except Exception as exc:
                 checks.append(
                     _item(
@@ -170,34 +273,40 @@ async def run_readiness_check() -> dict:
                 )
                 continue
 
-            identity_ok = (
-                str(order_list.get("listClientOrderId") or "") == str(list_client_id)
-                and str(order_list.get("symbol") or "") == symbol
-            )
-            status = str(
-                order_list.get("listOrderStatus")
-                or order_list.get("listStatusType")
-                or "UNKNOWN"
-            )
+            status = protection["status"]
             checks.append(
                 _item(
-                    f"{symbol}_exchange_protection_identity",
-                    identity_ok,
-                    f"status={status}, orderListId={order_list.get('orderListId')}",
+                    f"{symbol}_exchange_protection_query",
+                    True,
+                    "queried the stored OCO and both Binance child orders",
                 )
             )
             checks.append(
                 _item(
-                    f"{symbol}_exchange_protection_active_or_terminal",
-                    status in {"EXECUTING", "ALL_DONE"},
-                    f"status={status}",
+                    f"{symbol}_exchange_protection_identity",
+                    True,
+                    f"status={status}, orderListId={protection['order_list_id']}",
+                )
+            )
+            checks.append(
+                _item(
+                    f"{symbol}_exchange_protection_children_verified",
+                    protection["verified"],
+                    json.dumps(protection["children"]),
+                )
+            )
+            checks.append(
+                _item(
+                    f"{symbol}_exchange_protection_both_legs_active",
+                    protection["protected"],
+                    f"status={status}; protected={protection['protected']}",
                 )
             )
             checks.append(
                 _item(
                     f"{symbol}_open_orders_visible",
-                    bool(symbol_orders) or status == "ALL_DONE",
-                    f"{len(symbol_orders)} open exchange order(s) for symbol",
+                    protection["protected"] and len(symbol_orders) >= 2,
+                    f"{len(symbol_orders)} open exchange order(s) for symbol; expected both OCO legs",
                 )
             )
 

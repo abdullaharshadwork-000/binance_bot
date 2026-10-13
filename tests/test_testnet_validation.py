@@ -233,7 +233,10 @@ def test_recover_and_close_verifies_same_persisted_oco(tmp_path):
         "orderListId": 777,
         "listClientOrderId": "agt-prot-restart",
         "listOrderStatus": "EXECUTING",
-        "orders": [],
+        "orders": [
+            {"symbol": "BTCUSDT", "orderId": 7781, "clientOrderId": "agt-tp-restart"},
+            {"symbol": "BTCUSDT", "orderId": 7782, "clientOrderId": "agt-sl-restart"},
+        ],
     }
     exchange.close.return_value = None
 
@@ -329,7 +332,10 @@ def test_recover_and_close_fails_on_different_oco_identity(tmp_path):
         "orderListId": 999,
         "listClientOrderId": "agt-prot-other",
         "listOrderStatus": "EXECUTING",
-        "orders": [],
+        "orders": [
+            {"symbol": "BTCUSDT", "orderId": 9991, "clientOrderId": "agt-tp-other"},
+            {"symbol": "BTCUSDT", "orderId": 9992, "clientOrderId": "agt-sl-other"},
+        ],
     }
     exchange.close.return_value = None
 
@@ -388,7 +394,10 @@ def test_offline_recovery_refuses_still_executing_oco(tmp_path):
         "orderListId": 888,
         "listClientOrderId": "agt-prot-offline",
         "listOrderStatus": "EXECUTING",
-        "orders": [],
+        "orders": [
+            {"symbol": "BTCUSDT", "orderId": 8891, "clientOrderId": "agt-tp-offline"},
+            {"symbol": "BTCUSDT", "orderId": 8892, "clientOrderId": "agt-sl-offline"},
+        ],
     }
     exchange.close.return_value = None
     validation_settings = validator.build_validation_settings(base, validation_db)
@@ -446,7 +455,10 @@ def test_offline_recovery_uses_exchange_fill_without_new_bot_sell(tmp_path):
         "orderListId": 888,
         "listClientOrderId": "agt-prot-offline",
         "listOrderStatus": "ALL_DONE",
-        "orders": [],
+        "orders": [
+            {"symbol": "BTCUSDT", "orderId": 8891, "clientOrderId": "agt-tp-offline"},
+            {"symbol": "BTCUSDT", "orderId": 8892, "clientOrderId": "agt-sl-offline"},
+        ],
     }
     exchange.close.return_value = None
 

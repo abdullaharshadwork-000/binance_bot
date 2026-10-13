@@ -153,13 +153,19 @@ async def open_offline_fill_validation(
                 "Offline-fill BUY succeeded but persisted OCO protection is missing"
             )
 
-        order_list = await exchange.get_order_list(
-            settings.symbol,
-            list_client_order_id=str(trade["protective_list_client_order_id"]),
-        )
-        if str(order_list.get("listOrderStatus") or "") != "EXECUTING":
+        # Reconcile through the broker so the test requires the same complete
+        # two-leg and child-order verification as normal startup recovery.
+        immediate_fill = await broker._protective_fill(trade)
+        trade = db.get_open_trade(settings.symbol, "testnet")
+        if immediate_fill is not None or trade is None:
             raise RuntimeError(
-                "Offline-fill test requires an active Binance OCO before Python exits"
+                "A protective leg triggered during offline-test setup; the fill "
+                "was reconciled locally and the validation must be reviewed"
+            )
+        if str(trade.get("protection_status") or "") != "EXECUTING":
+            raise RuntimeError(
+                "Offline-fill test requires both active Binance OCO legs before "
+                "Python exits"
             )
 
         return {

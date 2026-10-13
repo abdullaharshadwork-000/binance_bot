@@ -103,7 +103,9 @@ The learning component uses fixed rules over recent closed trades to adjust the 
 - `testnet`: Binance Spot Testnet orders.
 - `live`: real Binance Spot orders. Execution requires `ALLOW_LIVE_TRADING=true`, `LIVE_PROTECTION_VALIDATED=true`, valid API credentials, and any applicable multi-symbol live opt-in.
 
-Never give the API key withdrawal permission. Keep `.env` private.
+Never give the API key withdrawal permission. Keep `.env` private. The dashboard
+control API is intended for localhost only. Host/origin checks are defense in depth,
+not authentication; do not expose it through a public or shared-network proxy.
 
 ## Market universe and multi-symbol mode
 
@@ -126,13 +128,15 @@ operational load; it does not promise more profit. Defaults keep the portfolio t
 two simultaneous positions and 15% maximum configured-coin exposure.
 
 All bots share one background account request and one portfolio valuation:
-quote cash is counted once, and configured coin holdings (including locked
-balances in Testnet/live) are valued using fresh prices. Coins outside the
-configured list are not included in this valuation. Existing holdings of the
-configured coins count toward exposure, including pre-funded Testnet balances.
-Paper holdings come from each coin's open-position ledger instead of the old
-shared base balance. Existing USDT paper cash is preserved; other quote assets
-use separate cash keys. Previously corrupted paper history is not repaired.
+quote cash is counted once, and selected-coin holdings (including locked
+balances in Testnet/live) are valued using fresh prices. Other non-quote account
+assets are also included when an active direct or inverse Spot pair can value them
+in `QUOTE_ASSET`; if any cannot be priced, new entries fail closed until the account
+is reconciled. Existing selected-market holdings count toward exposure even when
+they are outside bot positions. Paper holdings come from each coin's open-position
+ledger instead of the old shared base balance. Existing USDT paper cash is
+preserved; other quote assets use separate cash keys. Previously corrupted paper
+history is not repaired.
 
 Additional settings (defaults apply without changing an existing `.env`):
 
@@ -145,7 +149,7 @@ Additional settings (defaults apply without changing an existing `.env`):
 | `UNIVERSE_PINNED_SYMBOLS` | empty | Comma-separated manual Spot pairs to keep in addition to the volume-ranked set. |
 | `UNIVERSE_EXCLUDED_BASES` | common stablecoins | Comma-separated base assets excluded from dynamic discovery. |
 | `STRATEGY_MIN_ADX` | `16` | Requires additional directional-trend strength for new entries; this is a heuristic, not a profitability claim. |
-| `MAX_PORTFOLIO_EXPOSURE_FRACTION` | `0.15` | Blocks entries that would take combined configured-coin exposure above 15% of portfolio equity. |
+| `MAX_PORTFOLIO_EXPOSURE_FRACTION` | `0.15` | Blocks entries that would take combined valued non-quote account exposure above 15% of portfolio equity. |
 | `ACCOUNT_MAX_AGE_SECONDS` | `15` | Blocks entries when account valuation is too old; protective exits continue independently. Must be at least `ACCOUNT_REFRESH_SECONDS`. |
 | `MAX_ENTRY_DEVIATION_PCT` | `0.015` | Rejects entries when price has moved more than 1.5% from the signal candle close. |
 | `ENTRY_COOLDOWN_SECONDS` | `60` | Prevents immediate re-entry in a coin after its latest recorded exit. |
@@ -237,7 +241,12 @@ in the same SQLite transaction as the order's `ledger_applied` marker. If a cras
 or incomplete response prevents that transaction, new orders for that symbol stay
 blocked. `RECOVERY_REQUIRED` cannot be cleared merely by restarting. Compare the
 exchange order, fills, commissions and local position before any manual repair;
-do not delete the intent or reset the database to bypass a block.
+do not delete the intent or reset the database to bypass a block. Commissions paid
+in a third asset are converted through an active direct/inverse Spot market. If
+conversion is unavailable, the configured fee-rate estimate is used rather than
+silently treating the fee as zero; the estimate and raw commission asset/amount
+are retained in the order record. Fresh-price conversion may differ from the exact
+quote value at fill time, especially during delayed recovery.
 
 
 ### When the bot is not entering trades
@@ -282,10 +291,16 @@ volume ratios against independent arithmetic and verify the score breakdown.
 
 Testnet BUY fills now receive a Binance Spot OCO SELL protection list: a
 LIMIT_MAKER take-profit above the market and a STOP_LOSS leg below the market.
-The order-list identifiers are persisted on the local trade so the bot can
-reconcile protection after a restart. If Binance reports that a protective leg
-filled, the local trade is closed only after the account fills reconcile to the
-executed quantity.
+The list client ID is persisted before the request; the bot reports protection
+only after Binance confirms the matching active list and both expected child IDs
+with distinct order IDs. An incomplete or mismatched response is retained as
+`PROTECTION_UNKNOWN` and is not blindly resubmitted. Restart reconciliation
+verifies both child orders and their identities before applying complete Binance
+account fills locally. A verified terminal list is replaced only after its child
+states and fills are reconciled, with per-list cumulative baselines preserving
+accounting when a partial exit leaves residual quantity to re-protect. An immediately
+terminal placement response is reconciled before protection is reported; uncertain
+or incomplete outcomes remain blocked rather than duplicating an OCO.
 
 Software breakeven/trailing logic remains an additional layer. When it chooses
 to exit earlier, the bot first reconciles and cancels the OCO before submitting
@@ -307,7 +322,7 @@ live-capable path:
 2. refuses to run if the normal bot owns the main database lock;
 3. refuses to run if the selected symbol already has open Binance orders;
 4. buys approximately the requested quote amount on Spot Testnet;
-5. verifies that the Binance OCO protection list exists and is persisted;
+5. verifies the persisted Binance OCO list and both child orders are active;
 6. recreates the exchange client and broker against the same validation database
    to simulate a restart;
 7. reconciles the persisted protection after restart;
@@ -434,8 +449,8 @@ python check_live_readiness.py
 The checker is intentionally read-only. It does not place, cancel, or modify
 orders and does not change `.env`. It verifies the current configuration, local
 unresolved-order state, Binance Testnet connectivity, signed account access, and
-persisted/exchange OCO identity for any local open Testnet position. It also
-flags configured-symbol open orders whose client IDs do not use the bot's
+persisted/exchange OCO identity and both active child-order states for any local
+open Testnet position. It also flags configured-symbol open orders whose client IDs do not use the bot's
 `agt-` prefix.
 
 A green result means the inspected operational state is internally consistent;
@@ -515,9 +530,15 @@ changing Testnet or placing orders, run:
 python compare_strategy_intervals.py
 ```
 
-By default it downloads seven days of public Binance Spot candle history for all
-configured symbols and evaluates the current EMA/momentum/RSI/volume entry rules,
-stop loss, take profit, breakeven/trailing protection, configured fees, baseline
+By default it downloads seven days of public Binance Spot candle history for
+all configured symbols when `UNIVERSE_MODE=configured` is active. In
+`top_volume` mode, it uses the last selected universe saved by the trading engine,
+plus configured symbols, manual pins, and any symbols retained for open positions
+or unresolved orders. Discover the dynamic universe in the dashboard at least
+once before running the comparison; otherwise the tool fails instead of silently
+backtesting only the fallback symbol. The comparison evaluates the current
+EMA/momentum/RSI/volume entry rules (including the configured ADX threshold), stop
+loss, take profit, breakeven/trailing protection, configured fees, baseline
 slippage, and an additional stress-slippage scenario.
 
 Useful overrides:

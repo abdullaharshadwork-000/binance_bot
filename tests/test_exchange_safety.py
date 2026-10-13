@@ -103,10 +103,13 @@ def test_unresolved_order_blocks_new_entry(tmp_path):
     asyncio.run(scenario())
 
 
-def test_third_asset_commission_is_converted_to_quote():
+def test_third_asset_commission_uses_active_direct_quote_pair():
     async def scenario():
         client = BinanceClient(Settings(_env_file=None))
-        client.ticker_price = AsyncMock(return_value=200.0)
+        client.asset_quote_conversion_pairs = AsyncMock(return_value={
+            "BNB": {"symbol": "BNBUSDT", "inverse": False},
+        })
+        client.ticker_prices = AsyncMock(return_value={"BNBUSDT": 200.0})
         order = {
             "fills": [
                 {
@@ -120,7 +123,90 @@ def test_third_asset_commission_is_converted_to_quote():
 
         fee = await client.order_fee_quote(order, 100.0)
         assert fee == 2.0
-        client.ticker_price.assert_awaited_with("BNBUSDT")
+        client.asset_quote_conversion_pairs.assert_awaited_once_with(["BNB"], "USDT")
+        client.ticker_prices.assert_awaited_once_with(["BNBUSDT"])
+        await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_third_asset_commission_supports_inverse_quote_pair():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client.asset_quote_conversion_pairs = AsyncMock(return_value={
+            "BNB": {"symbol": "USDTBNB", "inverse": True},
+        })
+        client.ticker_prices = AsyncMock(return_value={"USDTBNB": 0.005})
+        order = {
+            "fills": [
+                {
+                    "price": "100",
+                    "qty": "1",
+                    "commission": "0.01",
+                    "commissionAsset": "BNB",
+                }
+            ]
+        }
+
+        fee = await client.order_fee_quote(order, 100.0)
+        assert fee == 2.0
+        client.asset_quote_conversion_pairs.assert_awaited_once_with(["BNB"], "USDT")
+        client.ticker_prices.assert_awaited_once_with(["USDTBNB"])
+        await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_missing_third_asset_ticker_uses_configured_fee_estimate():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None, trading_fee_bps=10))
+        client.asset_quote_conversion_pairs = AsyncMock(return_value={
+            "BNB": {"symbol": "BNBUSDT", "inverse": False},
+        })
+        client.ticker_prices = AsyncMock(return_value={})
+        order = {
+            "cummulativeQuoteQty": "100",
+            "fills": [{
+                "price": "100",
+                "qty": "1",
+                "commission": "0.01",
+                "commissionAsset": "BNB",
+            }],
+        }
+
+        assert await client.order_fee_quote(order, 100.0) == 0.1
+        assert order["_commission_quote_valuation"]["estimated"] is True
+        assert order["_commission_quote_valuation"]["unpriced_assets"] == ["BNB"]
+        await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_unpriceable_third_asset_commission_uses_configured_fee_estimate():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None, trading_fee_bps=10))
+        client.asset_quote_conversion_pairs = AsyncMock(return_value={})
+        client.ticker_prices = AsyncMock()
+        order = {
+            "cummulativeQuoteQty": "100",
+            "fills": [
+                {
+                    "price": "100",
+                    "qty": "1",
+                    "commission": "0.01",
+                    "commissionAsset": "BNB",
+                }
+            ],
+        }
+
+        fee = await client.order_fee_quote(order, 100.0)
+        assert fee == 0.1
+        client.ticker_prices.assert_not_awaited()
+        assert order["_commission_quote_valuation"]["estimated"] is True
+        assert order["_commission_quote_valuation"]["unpriced_assets"] == ["BNB"]
+        details = client.commission_details(order)
+        assert details[0] == {"asset": "BNB", "amount": 0.01}
+        assert details[-1]["type"] == "QUOTE_FEE_VALUATION"
         await client.close()
 
     asyncio.run(scenario())
@@ -592,22 +678,43 @@ def test_partial_protective_fill_reduces_local_position_once_and_keeps_remaining
             "listOrderStatus": "EXECUTING",
             "orders": [
                 {
+                    "symbol": "BTCUSDT",
                     "orderId": 7100,
                     "clientOrderId": "agt-sl-partial",
-                }
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7101,
+                    "clientOrderId": "agt-tp-partial",
+                },
             ],
         })
-        exchange.get_order = AsyncMock(return_value={
-            "symbol": "BTCUSDT",
-            "orderId": 7100,
-            "clientOrderId": "agt-sl-partial",
-            "status": "PARTIALLY_FILLED",
-            "type": "STOP_LOSS",
-            "side": "SELL",
-            "origQty": "0.00040000",
-            "executedQty": "0.00010000",
-            "price": "0.00000000",
-        })
+        async def partial_order_lookup(symbol, *, client_order_id):
+            if client_order_id == "agt-sl-partial":
+                return {
+                    "symbol": symbol,
+                    "orderId": 7100,
+                    "clientOrderId": client_order_id,
+                    "status": "PARTIALLY_FILLED",
+                    "type": "STOP_LOSS",
+                    "side": "SELL",
+                    "origQty": "0.00040000",
+                    "executedQty": "0.00010000",
+                    "price": "0.00000000",
+                }
+            return {
+                "symbol": symbol,
+                "orderId": 7101,
+                "clientOrderId": client_order_id,
+                "status": "NEW",
+                "type": "LIMIT_MAKER",
+                "side": "SELL",
+                "origQty": "0.00040000",
+                "executedQty": "0",
+                "price": "84000",
+            }
+
+        exchange.get_order = AsyncMock(side_effect=partial_order_lookup)
         exchange.my_trades = AsyncMock(return_value=[
             {
                 "symbol": "BTCUSDT",
@@ -691,7 +798,18 @@ def test_cumulative_partial_protective_fill_applies_only_new_delta_then_closes(t
             "orderListId": 9200,
             "listClientOrderId": "agt-prot-progress",
             "listOrderStatus": "EXECUTING",
-            "orders": [{"orderId": 7200, "clientOrderId": "agt-sl-progress"}],
+            "orders": [
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7200,
+                    "clientOrderId": "agt-sl-progress",
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 7201,
+                    "clientOrderId": "agt-tp-progress",
+                },
+            ],
         })
 
         states = [
@@ -792,6 +910,18 @@ def test_cumulative_partial_protective_fill_applies_only_new_delta_then_closes(t
         cursor = {"i": 0}
 
         async def get_order(symbol, *, client_order_id=None, order_id=None):
+            if client_order_id == "agt-tp-progress":
+                return {
+                    "symbol": symbol,
+                    "orderId": 7201,
+                    "clientOrderId": client_order_id,
+                    "status": "CANCELED" if cursor["i"] >= 2 else "NEW",
+                    "type": "LIMIT_MAKER",
+                    "side": "SELL",
+                    "origQty": "0.00040000",
+                    "executedQty": "0",
+                    "price": "84000.00000000",
+                }
             return states[cursor["i"]][0]
 
         async def my_trades(symbol, *, order_id=None):
@@ -803,7 +933,18 @@ def test_cumulative_partial_protective_fill_applies_only_new_delta_then_closes(t
                     "orderListId": 9200,
                     "listClientOrderId": "agt-prot-progress",
                     "listOrderStatus": "ALL_DONE",
-                    "orders": [{"orderId": 7200, "clientOrderId": "agt-sl-progress"}],
+                    "orders": [
+                        {
+                            "symbol": "BTCUSDT",
+                            "orderId": 7200,
+                            "clientOrderId": "agt-sl-progress",
+                        },
+                        {
+                            "symbol": "BTCUSDT",
+                            "orderId": 7201,
+                            "clientOrderId": "agt-tp-progress",
+                        },
+                    ],
                 }
             return fills
 
@@ -876,7 +1017,10 @@ def test_oco_submit_timeout_reconciles_by_same_client_id(tmp_path):
             "orderListId": 12345,
             "listClientOrderId": "fixed-protection-id",
             "listOrderStatus": "EXECUTING",
-            "orders": [],
+            "orders": [
+                {"symbol": "BTCUSDT", "orderId": 12346, "clientOrderId": "fixed-tp-id"},
+                {"symbol": "BTCUSDT", "orderId": 12347, "clientOrderId": "fixed-sl-id"},
+            ],
         })
 
         broker = Broker(settings, exchange, db)
@@ -961,7 +1105,7 @@ def test_oco_submit_and_reconciliation_failure_persists_unknown_and_does_not_ret
         assert trade["protection_status"] == "PROTECTION_UNKNOWN"
 
         second = await broker._place_exchange_protection(trade)
-        assert second["protected"] is True
+        assert second["protected"] is False
         assert second["status"] == "PROTECTION_UNKNOWN"
         assert second["list_client_order_id"] == "unknown-protection-id"
         assert exchange.place_protective_oco.await_count == 1
@@ -1017,22 +1161,32 @@ def test_oco_cancel_timeout_with_fill_reconciles_without_duplicate_market_sell(t
             "listOrderStatus": "ALL_DONE",
             "orders": [
                 {
+                    "symbol": "BTCUSDT",
                     "orderId": 556,
                     "clientOrderId": "cancel-race-sl",
-                }
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 557,
+                    "clientOrderId": "cancel-race-tp",
+                },
             ],
         })
-        exchange.get_order = AsyncMock(return_value={
-            "symbol": "BTCUSDT",
-            "orderId": 556,
-            "clientOrderId": "cancel-race-sl",
-            "status": "FILLED",
-            "type": "STOP_LOSS",
-            "side": "SELL",
-            "origQty": "0.00100000",
-            "executedQty": "0.00100000",
-            "price": "0.00000000",
-        })
+        async def cancel_race_order(symbol, *, client_order_id):
+            is_stop = client_order_id == "cancel-race-sl"
+            return {
+                "symbol": symbol,
+                "orderId": 556 if is_stop else 557,
+                "clientOrderId": client_order_id,
+                "status": "FILLED" if is_stop else "CANCELED",
+                "type": "STOP_LOSS" if is_stop else "LIMIT_MAKER",
+                "side": "SELL",
+                "origQty": "0.00100000",
+                "executedQty": "0.00100000" if is_stop else "0",
+                "price": "0.00000000" if is_stop else "110",
+            }
+
+        exchange.get_order = AsyncMock(side_effect=cancel_race_order)
         exchange.my_trades = AsyncMock(return_value=[
             {
                 "symbol": "BTCUSDT",
@@ -1188,7 +1342,10 @@ def test_recovered_buy_gets_exchange_protection_before_reconciliation_completes(
             "orderListId": 444,
             "listClientOrderId": "recover-prot",
             "listOrderStatus": "EXECUTING",
-            "orders": [],
+            "orders": [
+                {"symbol": "BTCUSDT", "orderId": 445, "clientOrderId": "recover-tp"},
+                {"symbol": "BTCUSDT", "orderId": 446, "clientOrderId": "recover-sl"},
+            ],
         })
 
         broker = Broker(settings, exchange, db)
@@ -1245,7 +1402,10 @@ def test_startup_reconciliation_installs_missing_exchange_protection(tmp_path):
             "orderListId": 8080,
             "listClientOrderId": "startup-prot",
             "listOrderStatus": "EXECUTING",
-            "orders": [],
+            "orders": [
+                {"symbol": "BTCUSDT", "orderId": 8081, "clientOrderId": "startup-tp"},
+                {"symbol": "BTCUSDT", "orderId": 8082, "clientOrderId": "startup-sl"},
+            ],
         })
 
         broker = Broker(settings, exchange, db)

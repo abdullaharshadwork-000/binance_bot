@@ -9,6 +9,17 @@ existing strategy score is a heuristic, not a measured probability of profit.
 ## Implemented and tested
 
 - Order identity checks bind symbol, side and client order ID to the request.
+- Protective OCO identity is persisted before submission. The bot reports an OCO
+  protected only when Binance confirms an active list, its list identity, and both
+  expected take-profit/stop child client IDs with distinct order IDs. Query-time
+  reconciliation also verifies both child orders and their identities. Per-list
+  accounting baselines preserve partial-exit accounting across a verified terminal
+  list replacement. Incomplete or mismatched responses become `PROTECTION_UNKNOWN`
+  and are never blindly resubmitted.
+- Terminal or immediately filled OCO responses are reconciled against both child
+  orders and complete account fills. A verified terminal list can be retired and
+  replaced for any still-open residual quantity; repeated terminal/uncertain
+  outcomes remain blocked for manual reconciliation.
 - Invalid prices, quantities and non-BUY entry signals cannot place an entry.
 - Persisted intents and transactional checks prevent a second pending order for
   the same symbol. A timeout is queried by client ID rather than resubmitted.
@@ -26,6 +37,11 @@ existing strategy score is a heuristic, not a measured probability of profit.
   insufficient depth, crossed books and excessive estimated price movement.
 - Fee/slippage sizing, portfolio exposure caps, stale-data guards, loss-streak
   pauses and the existing protective exit checks remain active.
+- Third-asset commissions are valued through an active direct/inverse Spot pair
+  and a fresh batched quote price. If conversion is unavailable, the bot applies a
+  configured-fee-rate estimate instead of treating the fee as zero; raw commission
+  asset/amount and the estimate warning are retained in the order record and shown
+  with the execution details.
 
 Regression tests inject timeouts, cancellation, mismatched responses, partial
 fills, persistence failures, concurrent brokers and rate limits. They use fake
@@ -54,6 +70,10 @@ exchange responses and temporary databases; they do not place exchange orders.
    exchange holdings and order history before considering a live migration.
 7. The dashboard is intended for localhost. It lacks authentication suitable for
    public or shared-network deployment and must not be exposed as a live control API.
+8. Third-asset commissions converted at processing time can differ from their
+   exact quote value at fill time. If no direct/inverse pair or fresh price is
+   available, the configured fee-rate estimate is used; the original commission
+   asset and amount remain in the order record for review.
 
 ## Verification before real funds
 
@@ -84,20 +104,33 @@ API behavior references:
   of silently closing a different quantity.
 - Read-only analysis uses the same portfolio equity/capacity/exposure gates as
   live execution logic.
+- Non-quote balances outside the selected universe are valued through a fresh
+  direct/inverse quote-asset Spot pair and included as unmanaged exposure. If any
+  account asset lacks a usable pair/price, new entries fail closed until reconciled.
+- Trading-control routes require a loopback client and localhost Host, and reject
+  mismatched browser Origins and cross-site Fetch Metadata; this is defense in depth,
+  not a substitute for authentication or a safe public deployment.
 - Failed entries use a retry backoff instead of retrying every fast cycle.
 - The optional LLM advisor can only reduce confidence; it cannot promote an
   otherwise non-qualifying trade.
-- Trading-control HTTP endpoints are restricted to localhost clients.
+- Trading-control HTTP endpoints require a loopback client and localhost Host. Cross-origin Origin and `Sec-Fetch-Site: cross-site` requests are rejected to reduce browser CSRF and DNS-rebinding exposure. This is defense in depth, not authentication; do not expose the dashboard on a network.
 
 
 ## Testnet exchange-resident protection
 
 The bot now installs a Binance Spot OCO protection list immediately after a
 successful Testnet BUY. The upper leg is a LIMIT_MAKER take-profit and the lower
-leg is a STOP_LOSS. Binance cancels the sibling leg when one executes. The local
-trade persists both the Binance order-list id and list client id, and restart
-reconciliation queries the order list and individual child orders before
-applying a protective fill locally.
+leg is a STOP_LOSS. Binance cancels the sibling leg when one executes. Before it
+submits the OCO, the bot persists the list client id so a crash cannot cause a
+blind duplicate submission. It reports protection only after Binance confirms the
+matching active list and both requested child client IDs with distinct order IDs.
+Malformed or uncertain responses persist `PROTECTION_UNKNOWN` for reconciliation.
+Restart reconciliation verifies the complete two-child list, each returned child
+order's symbol/client/order identity, side, type and status, and complete account
+fills before applying a protective fill locally. Terminal lists that are fully
+verified and have no unreconciled execution are replaced for the residual position;
+uncertain child state or incomplete fills remains blocked. Immediately terminal
+placement responses are reconciled before the entry is reported as protected.
 
 Software exits first reconcile the OCO, then cancel it, then submit a market
 SELL. If an OCO leg fills during the cancellation race, the exchange fill wins

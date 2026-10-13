@@ -15,6 +15,7 @@ import pandas as pd
 
 from app.config import Settings
 from app.models import SignalSide
+from app.storage.db import TradingDB
 from app.strategy.ensemble import EnsembleStrategy
 
 
@@ -23,6 +24,36 @@ PUBLIC_BINANCE = "https://api.binance.com"
 FETCH_RETRIES = 5
 CACHE_MAX_AGE_SECONDS = 30 * 60
 CACHE_DIR = Path("data/strategy_interval_cache")
+
+
+def symbols_for_comparison(settings: Settings) -> list[str]:
+    """Use the same persisted dynamic market set as the trading engine."""
+    if settings.universe_mode != "top_volume":
+        return settings.trading_symbols
+
+    saved_symbols: list[str] = []
+    tracked_symbols: list[str] = []
+    database_path = Path(settings.database_path)
+    if database_path.is_file():
+        # Read the live engine's last selected universe without initializing or
+        # migrating its database as a side effect of a research run.
+        db = TradingDB(str(database_path))
+        saved_symbols = db.saved_trading_universe(mode=settings.mode)
+        tracked_symbols = db.tracked_symbols(mode=settings.mode)
+
+    symbols = [
+        *saved_symbols,
+        *settings.configured_symbols,
+        *settings.pinned_trading_symbols,
+        *tracked_symbols,
+    ]
+    symbols = list(dict.fromkeys(symbols))
+    if not symbols:
+        raise RuntimeError(
+            "No dynamic universe is recorded yet. Discover the market universe "
+            "from the dashboard first, or add manual pins before backtesting."
+        )
+    return symbols
 
 
 def interval_to_ms(interval: str) -> int:
@@ -336,6 +367,7 @@ def backtest_frame(
 
     strategy = EnsembleStrategy(
         min_trend_atr=settings.strategy_min_trend_atr,
+        min_adx=settings.strategy_min_adx,
         min_volume_ratio=settings.strategy_min_volume_ratio,
         max_extension_atr=settings.strategy_max_extension_atr,
     )
@@ -504,6 +536,7 @@ async def build_comparison(
     notional: float,
     extra_stress_slippage_bps: float,
 ) -> dict[str, Any]:
+    symbols = symbols_for_comparison(settings)
     timeout = httpx.Timeout(connect=15.0, read=60.0, write=20.0, pool=20.0)
     limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
     async with httpx.AsyncClient(
@@ -515,7 +548,7 @@ async def build_comparison(
         comparison = {}
         for interval in intervals:
             symbol_results = []
-            for symbol in settings.trading_symbols:
+            for symbol in symbols:
                 print(
                     f"Fetching {symbol} {interval} ({days} days)...",
                     file=sys.stderr,
@@ -547,7 +580,7 @@ async def build_comparison(
 
     return {
         "source": "Binance Spot public historical klines",
-        "symbols": settings.trading_symbols,
+        "symbols": symbols,
         "intervals": list(intervals),
         "days": days,
         "notional_per_trade": notional,
@@ -560,6 +593,7 @@ async def build_comparison(
             "trailing_stop_activation_pct": settings.trailing_stop_activation_pct,
             "trailing_stop_distance_pct": settings.trailing_stop_distance_pct,
             "strategy_min_trend_atr": settings.strategy_min_trend_atr,
+            "strategy_min_adx": settings.strategy_min_adx,
             "strategy_min_volume_ratio": settings.strategy_min_volume_ratio,
             "strategy_max_extension_atr": settings.strategy_max_extension_atr,
         },
