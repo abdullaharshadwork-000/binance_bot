@@ -17,6 +17,16 @@ def test_dashboard_has_plain_language_sections():
     assert "Portfolio Performance Summary" in DASHBOARD_HTML
 
 
+def test_dashboard_notices_are_compact_nonblocking_and_debounced():
+    assert 'id="liveNotice" class="notice" role="status" aria-live="polite" hidden' in DASHBOARD_HTML
+    assert ".notice{position:fixed" in DASHBOARD_HTML
+    assert "max-height:min(28vh,200px)" in DASHBOARD_HTML
+    assert "function setLiveNotice(message)" in DASHBOARD_HTML
+    assert "noticeClearTimer=setTimeout" in DASHBOARD_HTML
+    assert "New entries blocked: '+entryBlock" in DASHBOARD_HTML
+    assert "$('liveNotice').style.display" not in DASHBOARD_HTML
+
+
 def test_performance_summary_is_scoped_by_mode_and_symbol(tmp_path):
     db = TradingDB(str(tmp_path / "bot.db"))
     db.init()

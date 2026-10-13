@@ -22,7 +22,9 @@ DASHBOARD_HTML = r'''<!doctype html>
     button{border:0;border-radius:10px;padding:11px 16px;font-weight:800;color:white;cursor:pointer;transition:.15s}
     button:hover{transform:translateY(-1px);filter:brightness(1.06)}button:disabled{opacity:.55;cursor:wait;transform:none}
     .b-blue{background:var(--blue)}.b-green{background:#159447}.b-red{background:#c93434}.b-gray{background:#43546a}
-    .notice{border:1px solid #7a5a14;background:#2b220d;color:#ffd878;border-radius:12px;padding:12px 14px;margin-bottom:18px;font-size:13px}
+    .notice{position:fixed;right:16px;bottom:16px;z-index:100;width:min(520px,calc(100vw - 32px));max-height:min(28vh,200px);overflow:auto;overflow-wrap:anywhere;border:1px solid #7a5a14;background:#2b220d;color:#ffd878;border-radius:12px;padding:12px 14px;margin:0;font-size:13px;line-height:1.45;box-shadow:0 16px 48px rgba(0,0,0,.48)}
+    .notice[hidden]{display:none}
+    @media(max-width:600px){.notice{right:10px;bottom:10px;width:calc(100vw - 20px);max-height:24vh}}
     .grid{display:grid;gap:14px}.stats{grid-template-columns:repeat(7,minmax(130px,1fr));margin-bottom:14px}
     .two{grid-template-columns:1.25fr .75fr;margin-bottom:14px}.three{grid-template-columns:repeat(3,1fr);margin-bottom:14px}
     .card{min-width:0;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.16)}
@@ -83,7 +85,7 @@ DASHBOARD_HTML = r'''<!doctype html>
     </div>
   </div>
 
-  <div id="liveNotice" class="notice" style="display:none"></div>
+  <div id="liveNotice" class="notice" role="status" aria-live="polite" hidden></div>
 
   <div class="controls">
     <div class="focus-control"><label for="focusSymbol">Focus market</label><select id="focusSymbol" aria-label="Focused market"></select></div>
@@ -247,10 +249,27 @@ function setLoading(on){
   if(!on)syncActionButtons();
   document.body.classList.toggle('loading',on)
 }
+let noticeClearTimer=null;
+function setLiveNotice(message){
+  const notice=$('liveNotice');
+  const next=String(message||'').trim();
+  if(!next){
+    if(!notice.hidden&&noticeClearTimer===null){
+      noticeClearTimer=setTimeout(()=>{
+        notice.hidden=true;
+        notice.textContent='';
+        noticeClearTimer=null;
+      },2000);
+    }
+    return;
+  }
+  if(noticeClearTimer!==null){clearTimeout(noticeClearTimer);noticeClearTimer=null}
+  if(notice.textContent!==next)notice.textContent=next;
+  notice.hidden=false;
+}
 function markDashboardStale(message){
   document.body.classList.add('dashboard-stale');
-  $('liveNotice').style.display='block';
-  $('liveNotice').textContent='Dashboard connection warning: '+message;
+  setLiveNotice('Dashboard connection warning: '+message);
   $('running').innerHTML='<span class="amber">UNKNOWN</span>';
   $('feedStatus').innerHTML='<span class="red">STALE</span>';
   $('feedAge').textContent='Live dashboard updates are unavailable';
@@ -466,8 +485,7 @@ async function refreshUniverse(silent=false){
     await loadCandles(true);
     $('updated').textContent=`Universe refreshed · ${(result.symbols||[]).length} markets`;
   }catch(e){
-    $('liveNotice').style.display='block';
-    $('liveNotice').textContent='Market discovery warning: '+e.message;
+    setLiveNotice('Market discovery warning: '+e.message);
     $('updated').textContent='Universe refresh failed';
   }finally{
     if(!silent)setLoading(false);
@@ -657,10 +675,9 @@ async function loadAll(showLoading=false,force=false){
     $('equityNote').textContent='Estimated current value in '+quoteAsset;
     drawCandles();
     const mode=d.config.mode;$('modePill').className='mode-pill '+mode;$('modePill').innerHTML=`<span class="dot"></span><span>${mode.toUpperCase()} MODE</span>`;
-    if(d.engine_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Engine warning: '+d.engine_error}
-    else if(d.market_error){$('liveNotice').style.display='block';$('liveNotice').textContent='Market/account data warning: '+d.market_error}
-    else if(mode==='live'){$('liveNotice').style.display='block';$('liveNotice').textContent=d.config.live_orders_allowed?'LIVE ORDERS ARE ENABLED. Real funds can be used.':'Live mode selected, but real orders are blocked because ALLOW_LIVE_TRADING=false.'}
-    else $('liveNotice').style.display='none';
+    const entryBlock=d.portfolio?.entry_block_reason;
+    const noticeMessage=entryBlock?'New entries blocked: '+entryBlock:d.engine_error?'Engine warning: '+d.engine_error:d.market_error?'Market/account data warning: '+d.market_error:mode==='live'?(d.config.live_orders_allowed?'LIVE ORDERS ARE ENABLED. Real funds can be used.':'Live mode selected, but real orders are blocked because ALLOW_LIVE_TRADING=false.'):'';
+    setLiveNotice(noticeMessage);
     $('running').innerHTML=d.portfolio_running?'<span class="green">RUNNING</span>':'<span class="red">STOPPED</span>';
     syncActionButtons();
     $('cycleNote').textContent=`Risk check every ${d.config.cycle_seconds}s · strategy on closed ${d.config.interval} candles`;
