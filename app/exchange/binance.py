@@ -2,9 +2,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import math
 import time
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from urllib.parse import urlencode
 
 import httpx
@@ -129,14 +130,54 @@ class BinanceClient:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 15.0)
 
-    async def exchange_info(self, symbol: str) -> dict:
+    async def _exchange_info(self) -> dict:
         if self._exchange_info_cache is None or time.monotonic() - self._exchange_info_cached_at >= 60:
             self._exchange_info_cache = await self._request("GET", "/api/v3/exchangeInfo")
             self._exchange_info_cached_at = time.monotonic()
-        for item in self._exchange_info_cache.get("symbols", []):
+        return self._exchange_info_cache
+
+    async def exchange_info(self, symbol: str) -> dict:
+        info = await self._exchange_info()
+        for item in info.get("symbols", []):
             if item.get("symbol") == symbol:
                 return item
         raise ValueError(f"Unknown Binance symbol: {symbol}")
+
+    async def asset_quote_conversion_pairs(
+        self,
+        assets: list[str],
+        quote_asset: str,
+    ) -> dict[str, dict]:
+        """Find active direct/inverse Spot pairs for valuing other account assets."""
+        quote = quote_asset.strip().upper()
+        wanted = {str(asset).strip().upper() for asset in assets if str(asset).strip()}
+        wanted.discard(quote)
+        info = await self._exchange_info()
+        markets: dict[tuple[str, str], dict] = {}
+        for market in info.get("symbols", []):
+            if (
+                market.get("status") != "TRADING"
+                or market.get("isSpotTradingAllowed") is False
+            ):
+                continue
+            base = str(market.get("baseAsset") or "").upper()
+            market_quote = str(market.get("quoteAsset") or "").upper()
+            symbol = str(market.get("symbol") or "").upper()
+            if base and market_quote and symbol:
+                markets[(base, market_quote)] = market
+
+        result: dict[str, dict] = {}
+        for asset in sorted(wanted):
+            direct = markets.get((asset, quote))
+            inverse = markets.get((quote, asset))
+            market = direct or inverse
+            if market is None:
+                continue
+            result[asset] = {
+                "symbol": str(market["symbol"]).upper(),
+                "inverse": direct is None,
+            }
+        return result
 
     async def discover_top_volume_symbols(
         self,
@@ -556,62 +597,200 @@ class BinanceClient:
         return float(quote / executed) if executed > 0 and quote > 0 else fallback
 
     def commission_details(self, order: dict) -> list[dict]:
-        return [
+        details = [
             {
                 "asset": str(fill.get("commissionAsset") or ""),
                 "amount": float(Decimal(str(fill.get("commission") or "0"))),
             }
             for fill in (order.get("fills") or [])
-            if Decimal(str(fill.get("commission") or "0")) > 0
+            if isinstance(fill, dict)
+            and Decimal(str(fill.get("commission") or "0")) > 0
         ]
+        valuation = order.get("_commission_quote_valuation")
+        if isinstance(valuation, dict):
+            details.append({"type": "QUOTE_FEE_VALUATION", **valuation})
+        return details
+
+    def _configured_fee_estimate_quote(
+        self,
+        order: dict,
+        fills: list[dict],
+        fill_price: float,
+    ) -> Decimal:
+        """Estimate total fees from the configured rate and order quote notional."""
+        try:
+            quote_notional = Decimal(str(order.get("cummulativeQuoteQty") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            quote_notional = Decimal("0")
+        if not quote_notional.is_finite() or quote_notional <= 0:
+            quote_notional = Decimal("0")
+            for fill in fills:
+                if not isinstance(fill, dict):
+                    continue
+                try:
+                    price = Decimal(str(fill.get("price") or "0"))
+                    quantity = Decimal(str(fill.get("qty") or "0"))
+                except (InvalidOperation, TypeError, ValueError):
+                    continue
+                if price.is_finite() and quantity.is_finite() and price > 0 and quantity > 0:
+                    quote_notional += price * quantity
+        if quote_notional <= 0 and math.isfinite(fill_price) and fill_price > 0:
+            try:
+                quantity = Decimal(str(order.get("executedQty") or "0"))
+            except (InvalidOperation, TypeError, ValueError):
+                quantity = Decimal("0")
+            if quantity.is_finite() and quantity > 0:
+                quote_notional = quantity * Decimal(str(fill_price))
+        rate = Decimal(str(self.settings.trading_fee_bps)) / Decimal("10000")
+        return max(Decimal("0"), quote_notional * rate)
 
     async def order_fee_quote(self, order: dict, fill_price: float) -> float:
-        """Convert fill commissions to quote currency, including third-asset fees when possible."""
+        """Value reported commissions; use a disclosed fee-rate estimate if needed."""
         fills = order.get("fills") or []
         if not fills:
-            return self.estimated_order_fee_quote(order, fill_price)
+            fee_quote = self.estimated_order_fee_quote(order, fill_price)
+            order["_commission_quote_valuation"] = {
+                "method": "configured_fee_rate_fallback",
+                "estimated": True,
+                "quote_asset": self.settings.quote_asset,
+                "quote_amount": fee_quote,
+                "unpriced_assets": [],
+                "warning": "Exchange fill-level commissions were unavailable",
+            }
+            return fee_quote
 
         total = Decimal("0")
+        third_asset_commissions: dict[str, Decimal] = {}
         saw_commission_field = False
         for fill in fills:
-            if "commission" not in fill:
+            if not isinstance(fill, dict) or "commission" not in fill:
                 continue
             saw_commission_field = True
-            commission = Decimal(str(fill.get("commission") or "0"))
-            if commission <= 0:
+            try:
+                commission = Decimal(str(fill.get("commission") or "0"))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ValueError("Invalid Binance fill commission") from exc
+            if not commission.is_finite() or commission < 0:
+                raise ValueError("Binance fill commission must be finite and non-negative")
+            if commission == 0:
                 continue
 
-            asset = str(fill.get("commissionAsset") or "")
+            asset = str(fill.get("commissionAsset") or "").strip().upper()
+            if not asset:
+                raise ValueError("Positive Binance commission is missing its asset")
             if asset == self.settings.quote_asset:
                 total += commission
                 continue
             if asset == self.settings.base_asset:
-                total += commission * Decimal(str(fill.get("price") or fill_price))
-                continue
-
-            # Third-asset commissions (for example BNB) are valued using the
-            # closest direct quote pair available. If neither pair exists, leave
-            # the fee unconverted but preserve it in commission_details().
-            try:
-                conversion = Decimal(
-                    str(await self.ticker_price(f"{asset}{self.settings.quote_asset}"))
-                )
+                try:
+                    conversion = Decimal(str(fill.get("price") or fill_price))
+                except (InvalidOperation, TypeError, ValueError) as exc:
+                    raise ValueError("Invalid fill price for base-asset commission") from exc
+                if not conversion.is_finite() or conversion <= 0:
+                    raise ValueError("Invalid fill price for base-asset commission")
                 total += commission * conversion
                 continue
-            except Exception:
-                pass
+            third_asset_commissions[asset] = (
+                third_asset_commissions.get(asset, Decimal("0")) + commission
+            )
+
+        unpriced_assets: list[str] = []
+        conversion_warnings: list[str] = []
+        if third_asset_commissions:
+            assets = sorted(third_asset_commissions)
             try:
-                inverse = Decimal(
-                    str(await self.ticker_price(f"{self.settings.quote_asset}{asset}"))
+                pairs = await self.asset_quote_conversion_pairs(
+                    assets,
+                    self.settings.quote_asset,
                 )
-                if inverse > 0:
-                    total += commission / inverse
-            except Exception:
-                pass
+            except Exception as exc:
+                pairs = {}
+                conversion_warnings.append(str(exc))
+
+            available_pairs = {}
+            for asset in assets:
+                pair = pairs.get(asset)
+                if isinstance(pair, dict) and pair.get("symbol"):
+                    available_pairs[asset] = pair
+                else:
+                    unpriced_assets.append(asset)
+
+            prices: dict[str, float] = {}
+            if available_pairs:
+                symbols = list(dict.fromkeys(
+                    pair["symbol"] for pair in available_pairs.values()
+                ))
+                try:
+                    prices = await self.ticker_prices(symbols)
+                except Exception as exc:
+                    conversion_warnings.append(str(exc))
+
+            for asset, pair in available_pairs.items():
+                try:
+                    conversion = Decimal(str(prices.get(pair["symbol"])))
+                except (InvalidOperation, TypeError, ValueError):
+                    unpriced_assets.append(asset)
+                    continue
+                if not conversion.is_finite() or conversion <= 0:
+                    unpriced_assets.append(asset)
+                    continue
+                commission = third_asset_commissions[asset]
+                total += (
+                    commission / conversion
+                    if pair.get("inverse")
+                    else commission * conversion
+                )
 
         if saw_commission_field:
-            return float(total)
-        return self.estimated_order_fee_quote(order, fill_price)
+            if unpriced_assets:
+                estimate = self._configured_fee_estimate_quote(
+                    order,
+                    fills,
+                    fill_price,
+                )
+                total = max(total, estimate)
+                warning = (
+                    "Third-asset commission(s) could not be converted; total quote "
+                    "fee uses the configured fee-rate estimate"
+                )
+                if conversion_warnings:
+                    warning += ": " + "; ".join(conversion_warnings)
+                order["_commission_quote_valuation"] = {
+                    "method": "configured_fee_rate_fallback",
+                    "estimated": True,
+                    "quote_asset": self.settings.quote_asset,
+                    "quote_amount": float(total),
+                    "unpriced_assets": sorted(set(unpriced_assets)),
+                    "warning": warning,
+                }
+                logging.getLogger(__name__).warning(warning)
+            else:
+                order["_commission_quote_valuation"] = {
+                    "method": (
+                        "fresh_direct_inverse_spot_quote"
+                        if third_asset_commissions
+                        else "reported_fill_commissions"
+                    ),
+                    "estimated": False,
+                    "quote_asset": self.settings.quote_asset,
+                    "quote_amount": float(total),
+                    "unpriced_assets": [],
+                }
+            fee_quote = float(total)
+            if not math.isfinite(fee_quote) or fee_quote < 0:
+                raise ValueError("Converted Binance commission is invalid")
+            return fee_quote
+
+        fee_quote = self.estimated_order_fee_quote(order, fill_price)
+        order["_commission_quote_valuation"] = {
+            "method": "configured_fee_rate_fallback",
+            "estimated": True,
+            "quote_asset": self.settings.quote_asset,
+            "quote_amount": fee_quote,
+            "unpriced_assets": [],
+            "warning": "Exchange fill-level commissions were incomplete",
+        }
+        return fee_quote
 
     def estimated_order_fee_quote(self, order: dict, fill_price: float) -> float:
         """Best-effort fee in quote currency. Third-asset fees remain recorded separately."""

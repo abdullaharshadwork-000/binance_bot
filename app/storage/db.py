@@ -53,6 +53,9 @@ class TradingDB:
                     protective_applied_qty REAL NOT NULL DEFAULT 0,
                     protective_applied_quote REAL NOT NULL DEFAULT 0,
                     protective_applied_fee_quote REAL NOT NULL DEFAULT 0,
+                    protective_list_base_qty REAL,
+                    protective_list_base_quote REAL,
+                    protective_list_base_fee_quote REAL,
                     opened_at TEXT NOT NULL,
                     closed_at TEXT
                 );
@@ -115,6 +118,12 @@ class TradingDB:
                 conn.execute(
                     "ALTER TABLE trades ADD COLUMN protective_applied_fee_quote REAL NOT NULL DEFAULT 0"
                 )
+            if "protective_list_base_qty" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN protective_list_base_qty REAL")
+            if "protective_list_base_quote" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN protective_list_base_quote REAL")
+            if "protective_list_base_fee_quote" not in columns:
+                conn.execute("ALTER TABLE trades ADD COLUMN protective_list_base_fee_quote REAL")
             order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
             if "ledger_applied" not in order_columns:
                 # Preserve historical records; every new intent explicitly starts at 0.
@@ -185,23 +194,52 @@ class TradingDB:
         status: str,
     ) -> None:
         with self.connection() as conn:
-            cur = conn.execute(
-                """
-                UPDATE trades
-                SET protective_order_list_id=?,
-                    protective_list_client_order_id=?,
-                    protection_status=?
-                WHERE id=? AND status='OPEN'
-                """,
-                (
-                    str(order_list_id) if order_list_id is not None else None,
-                    list_client_order_id,
-                    status,
-                    trade_id,
-                ),
-            )
-            if cur.rowcount != 1:
+            row = conn.execute(
+                "SELECT * FROM trades WHERE id=? AND status='OPEN'",
+                (trade_id,),
+            ).fetchone()
+            if row is None:
                 raise ValueError("Open trade not found while updating protection")
+            new_identity = row["protective_list_client_order_id"] != list_client_order_id
+            if new_identity:
+                # Execution fields are cumulative across an open position, but
+                # each newly submitted OCO starts its own child-order cumulative
+                # fill counter. Keep a base so later OCO fills apply only their
+                # new delta without losing accounting from an earlier terminal list.
+                conn.execute(
+                    """
+                    UPDATE trades
+                    SET protective_order_list_id=?,
+                        protective_list_client_order_id=?,
+                        protection_status=?,
+                        protective_list_base_qty=protective_applied_qty,
+                        protective_list_base_quote=protective_applied_quote,
+                        protective_list_base_fee_quote=protective_applied_fee_quote
+                    WHERE id=? AND status='OPEN'
+                    """,
+                    (
+                        str(order_list_id) if order_list_id is not None else None,
+                        list_client_order_id,
+                        status,
+                        trade_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE trades
+                    SET protective_order_list_id=?,
+                        protective_list_client_order_id=?,
+                        protection_status=?
+                    WHERE id=? AND status='OPEN'
+                    """,
+                    (
+                        str(order_list_id) if order_list_id is not None else None,
+                        list_client_order_id,
+                        status,
+                        trade_id,
+                    ),
+                )
 
     def apply_protective_execution(
         self,

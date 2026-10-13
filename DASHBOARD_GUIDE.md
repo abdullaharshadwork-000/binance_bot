@@ -51,10 +51,15 @@ filters.
 
 A BUY signal still needs portfolio/risk approval. Controls include position sizing,
 daily realized-loss checks, exposure and concurrency caps, entry-price deviation,
-order-book liquidity checks, Binance filters, and order recovery. Paper mode includes
-configurable fees and slippage. Testnet/live exchange fills can differ from estimates;
-loss controls do not guarantee a maximum loss.
+order-book liquidity checks, Binance filters, and order recovery. All non-quote
+account balances are included when a direct/inverse Spot pair can value them in the
+configured quote asset; an unpriceable asset blocks new entries rather than being
+silently ignored. Paper mode includes configurable fees and slippage. Testnet/live
+exchange fills can differ from estimates; loss controls do not guarantee a maximum
+loss.
 
-Keep the control dashboard on localhost. Live trading requires separate explicit
-configuration gates and sustained Testnet validation; passing unit tests alone is
-not live readiness.
+Keep the control dashboard on localhost. Bot-control routes reject non-loopback
+clients, non-local Host headers, and cross-origin browser requests as defense in
+depth; this is not authentication and does not make public/shared-network exposure
+safe. Live trading requires separate explicit configuration gates and sustained
+Testnet validation; passing unit tests alone is not live readiness.

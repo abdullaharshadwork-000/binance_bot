@@ -2,6 +2,7 @@ import asyncio
 
 import httpx
 import pandas as pd
+import pytest
 
 import compare_strategy_intervals as comparison
 from app.config import Settings
@@ -44,6 +45,56 @@ def test_trade_costs_are_progressively_more_conservative():
     assert result["cost_adjusted_pnl"] > result["stress_adjusted_pnl"]
 
 
+def test_dynamic_universe_comparison_uses_persisted_symbols_and_pins(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        mode="paper",
+        symbol="BTCUSDT",
+        quote_asset="USDT",
+        universe_mode="top_volume",
+        universe_pinned_symbols="BNBUSDT",
+        database_path=str(tmp_path / "trading.db"),
+    )
+    db = comparison.TradingDB(settings.database_path)
+    db.init()
+    db.save_trading_universe(mode="paper", symbols=["ETHUSDT", "SOLUSDT"])
+    db.open_trade(
+        mode="paper",
+        symbol="XRPUSDT",
+        quantity=1.0,
+        entry_price=1.0,
+        entry_fee=0.0,
+        reason="test open position",
+        stop_price=0.9,
+        take_profit_price=1.1,
+    )
+
+    # Config fallback is not a substitute for the selected dynamic universe.
+    assert settings.trading_symbols == ["BTCUSDT"]
+    assert comparison.symbols_for_comparison(settings) == [
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+    ]
+
+
+def test_dynamic_universe_comparison_fails_without_a_selected_universe(tmp_path):
+    database_path = tmp_path / "trading.db"
+    settings = Settings(
+        _env_file=None,
+        mode="paper",
+        symbol="BTCUSDT",
+        quote_asset="USDT",
+        universe_mode="top_volume",
+        database_path=str(database_path),
+    )
+
+    with pytest.raises(RuntimeError, match="No dynamic universe is recorded"):
+        comparison.symbols_for_comparison(settings)
+    assert not database_path.exists()
+
+
 def test_short_history_returns_zero_trades():
     frame = pd.DataFrame(
         [
@@ -74,8 +125,11 @@ def test_short_history_returns_zero_trades():
 
 
 def test_backtest_enters_on_next_open_and_can_hit_take_profit(monkeypatch):
+    strategy_arguments = {}
+
     class FakeStrategy:
         def __init__(self, **kwargs):
+            strategy_arguments.update(kwargs)
             self.calls = 0
 
         def evaluate(self, raw_df, has_position):
@@ -108,10 +162,12 @@ def test_backtest_enters_on_next_open_and_can_hit_take_profit(monkeypatch):
             }
         )
     frame = pd.DataFrame(rows)
+    settings = _settings()
+    settings.strategy_min_adx = 27.0
 
     result = comparison.backtest_frame(
         frame,
-        settings=_settings(),
+        settings=settings,
         interval="5m",
         symbol="BTCUSDT",
         notional=3000.0,
@@ -123,6 +179,7 @@ def test_backtest_enters_on_next_open_and_can_hit_take_profit(monkeypatch):
     assert trade["entry_time"] == rows[61]["open_time"]
     assert trade["reason"] == "Take profit"
     assert trade["raw_pnl"] > 0
+    assert strategy_arguments["min_adx"] == 27.0
 
 
 def test_combined_results_keep_per_symbol_and_chronological_metrics():

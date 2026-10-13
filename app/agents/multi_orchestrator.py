@@ -2,6 +2,7 @@ import asyncio
 import time
 import math
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -27,6 +28,9 @@ class PortfolioCoordinator:
         self._balance_task: asyncio.Task | None = None
         self._balance_time: float | None = None
         self._balance_requested_at: float | None = None
+        self._valuation_task: asyncio.Task | None = None
+        self._other_holdings: list[dict] | None = None
+        self._other_holdings_error: str | None = None
         self.account_error: str | None = None
         self._retired_tasks: set[asyncio.Task] = set()
 
@@ -41,35 +45,136 @@ class PortfolioCoordinator:
 
         task.add_done_callback(consume)
 
+    def _unconfigured_account_assets(self, account: dict) -> tuple[list[dict], str | None]:
+        rows = account.get("balances") if isinstance(account, dict) else None
+        if not isinstance(rows, list):
+            return [], "Signed account response omitted its balances list"
+        configured_assets = {
+            self.settings.base_for_symbol(symbol)
+            for symbol in self.symbols
+        }
+        configured_assets.discard(None)
+        configured_assets.add(self.settings.quote_asset)
+        totals: dict[str, Decimal] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                return [], "Signed account response contains an invalid balance row"
+            asset = str(row.get("asset") or "").strip().upper()
+            if not asset:
+                return [], "Signed account balance row is missing its asset identifier"
+            if asset in configured_assets:
+                continue
+            try:
+                free = Decimal(str(row.get("free") or "0"))
+                locked = Decimal(str(row.get("locked") or "0"))
+                total = free + locked
+            except (InvalidOperation, TypeError, ValueError):
+                return [], f"Could not parse the {asset} account balance"
+            if not total.is_finite() or total < 0:
+                return [], f"Invalid free/locked quantity for account asset {asset}"
+            if total > 0:
+                totals[asset] = totals.get(asset, Decimal("0")) + total
+        return [
+            {"asset": asset, "quantity": float(quantity)}
+            for asset, quantity in sorted(totals.items())
+        ], None
+
+    async def _value_unconfigured_assets(self, account: dict) -> tuple[list[dict], str | None]:
+        assets, error = self._unconfigured_account_assets(account)
+        if error or not assets:
+            return [], error
+        if not self.bots:
+            return [], "No exchange client is available to value other account assets"
+        exchange = next(iter(self.bots.values())).exchange
+        try:
+            pairs = await exchange.asset_quote_conversion_pairs(
+                [item["asset"] for item in assets],
+                self.settings.quote_asset,
+            )
+            missing = [item["asset"] for item in assets if item["asset"] not in pairs]
+            if missing:
+                return [], (
+                    "Cannot value non-universe account asset(s) without an active "
+                    f"Spot pair against {self.settings.quote_asset}: {', '.join(missing)}"
+                )
+            symbols = list(dict.fromkeys(pair["symbol"] for pair in pairs.values()))
+            prices = await exchange.ticker_prices(symbols)
+            values = []
+            for item in assets:
+                asset = item["asset"]
+                pair = pairs[asset]
+                price = prices.get(pair["symbol"])
+                if price is None or not math.isfinite(price) or price <= 0:
+                    return [], f"Fresh quote price unavailable for unconfigured account asset {asset}"
+                quantity = item["quantity"]
+                value = quantity / price if pair["inverse"] else quantity * price
+                if not math.isfinite(value) or value < 0:
+                    return [], f"Invalid quote valuation for unconfigured account asset {asset}"
+                values.append({
+                    "asset": asset,
+                    "symbol": pair["symbol"],
+                    "quantity": quantity,
+                    "price": price,
+                    "value": value,
+                })
+            return values, None
+        except Exception as exc:
+            return [], f"Could not value non-universe account assets: {exc}"
+
     def invalidate_account(self) -> None:
         self._balances = None
         self._balance_time = None
         self._balance_requested_at = None
+        self._other_holdings = None
+        self._other_holdings_error = None
         if self._balance_task is not None:
             self._retire(self._balance_task)
             self._balance_task = None
+        if self._valuation_task is not None:
+            self._retire(self._valuation_task)
+            self._valuation_task = None
 
     async def close(self) -> None:
-        task = self._balance_task
+        tasks = [task for task in (self._balance_task, self._valuation_task) if task is not None]
         self.invalidate_account()
-        if task is not None:
-            await asyncio.gather(task, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self._retired_tasks:
             await asyncio.gather(*list(self._retired_tasks), return_exceptions=True)
 
     async def poll_equity(self) -> float | None:
         if self.settings.mode != "paper":
+            if self._valuation_task is not None and self._valuation_task.done():
+                task, self._valuation_task = self._valuation_task, None
+                try:
+                    self._other_holdings, self._other_holdings_error = task.result()
+                except Exception as exc:
+                    self._other_holdings = []
+                    self._other_holdings_error = f"Could not value other account assets: {exc}"
             if self._balance_task is not None and self._balance_task.done():
                 task, self._balance_task = self._balance_task, None
                 try:
                     self._balances = await task
                     self._balance_time = self._balance_requested_at
                     self.account_error = None
+                    assets, error = self._unconfigured_account_assets(self._balances)
+                    self._other_holdings_error = error
+                    if error:
+                        self._other_holdings = []
+                    elif assets:
+                        self._other_holdings = None
+                        self._valuation_task = asyncio.create_task(
+                            self._value_unconfigured_assets(self._balances)
+                        )
+                    else:
+                        self._other_holdings = []
                 except Exception as exc:
                     self.account_error = str(exc)
                     self._balances = None
+                    self._other_holdings = None
+                    self._other_holdings_error = None
             due = self._balance_requested_at is None or time.monotonic() - self._balance_requested_at >= self.settings.account_refresh_seconds
-            if due and self._balance_task is None and self.bots:
+            if due and self._balance_task is None and self._valuation_task is None and self.bots:
                 # Age from request start, so a slow response cannot look brand new.
                 self._balance_requested_at = time.monotonic()
                 self._balance_task = asyncio.create_task(next(iter(self.bots.values())).exchange.account())
@@ -83,6 +188,10 @@ class PortfolioCoordinator:
         age = None if self._balance_time is None else time.monotonic() - self._balance_time
         holdings = {}
         holding_details = []
+        configured_assets = {
+            self.settings.base_for_symbol(symbol) for symbol in self.symbols
+        }
+        configured_assets.discard(None)
         managed_exposure = 0.0
         unmanaged_exposure = 0.0
         if self.settings.mode == "paper":
@@ -93,13 +202,30 @@ class PortfolioCoordinator:
                 holdings[symbol] = float(self.db.get_state(key, "0"))
             equity = cash
         elif self._balances is not None and age is not None and age <= self.settings.account_max_age_seconds:
-            balances = {item["asset"]: item for item in self._balances.get("balances", [])}
-            quote = balances.get(self.settings.quote_asset, {})
-            cash = float(quote.get("free", 0))
-            equity = cash + float(quote.get("locked", 0))
-            for symbol in self.symbols:
-                asset = balances.get(self.settings.base_for_symbol(symbol), {})
-                holdings[symbol] = float(asset.get("free", 0)) + float(asset.get("locked", 0))
+            unconfigured_assets, balance_error = self._unconfigured_account_assets(self._balances)
+            valued_assets = {item["asset"] for item in (self._other_holdings or [])}
+            expected_assets = {item["asset"] for item in unconfigured_assets}
+            if balance_error:
+                error = balance_error
+            elif self._other_holdings_error:
+                error = self._other_holdings_error
+            elif expected_assets and (self._other_holdings is None or expected_assets != valued_assets):
+                missing = sorted(expected_assets - valued_assets)
+                unexpected = sorted(valued_assets - expected_assets)
+                details = []
+                if missing:
+                    details.append("missing " + ", ".join(missing))
+                if unexpected:
+                    details.append("stale " + ", ".join(unexpected))
+                error = "Non-universe account valuation is incomplete: " + "; ".join(details)
+            else:
+                balances = {item["asset"]: item for item in self._balances.get("balances", [])}
+                quote = balances.get(self.settings.quote_asset, {})
+                cash = float(quote.get("free", 0))
+                equity = cash + float(quote.get("locked", 0))
+                for symbol in self.symbols:
+                    asset = balances.get(self.settings.base_for_symbol(symbol), {})
+                    holdings[symbol] = float(asset.get("free", 0)) + float(asset.get("locked", 0))
         else:
             error = error or "Portfolio account snapshot is pending or stale"
         if equity is not None:
@@ -130,6 +256,27 @@ class PortfolioCoordinator:
                     "managed_value": managed_value, "unmanaged_value": unmanaged_value,
                 })
             if equity is not None:
+                for item in self._other_holdings or []:
+                    if item["asset"] in configured_assets:
+                        continue
+                    value = float(item["value"])
+                    if not math.isfinite(value) or value < 0:
+                        equity = None
+                        error = f"Invalid account valuation for {item['asset']}"
+                        break
+                    exposure += value
+                    unmanaged_exposure += value
+                    holding_details.append({
+                        "symbol": item["symbol"],
+                        "asset": item["asset"],
+                        "quantity": item["quantity"],
+                        "value": value,
+                        "managed_quantity": 0.0,
+                        "unmanaged_quantity": item["quantity"],
+                        "managed_value": 0.0,
+                        "unmanaged_value": value,
+                    })
+            if equity is not None:
                 equity += exposure
                 if not math.isfinite(equity) or equity <= 0:
                     equity = None
@@ -149,9 +296,10 @@ class PortfolioCoordinator:
                 "managed_exposure": managed_exposure if valuation_valid else None,
                 "unmanaged_exposure": unmanaged_exposure if valuation_valid else None,
                 "holdings": holding_details if valuation_valid else [],
+                "other_account_assets": self._other_holdings if valuation_valid else [],
                 "exposure_headroom": exposure_headroom,
                 "entry_block_reason": entry_block_reason,
-                "exposure_scope": "Configured symbols, including holdings outside bot positions",
+                "exposure_scope": "Selected markets plus all other valued non-quote account assets",
                 "exposure_fraction": exposure / equity if equity else None,
                 "max_exposure_fraction": self.settings.max_portfolio_exposure_fraction,
                 "account_age_seconds": age, "error": error}
@@ -413,6 +561,7 @@ class MultiSymbolTradingManager:
                 "ALLOW_MULTI_SYMBOL_LIVE=true only after Testnet validation."
             )
 
+        universe_changed = set(self.portfolio.symbols) != set(selected)
         old_bots = self.bots
         next_bots: dict[str, TradingOrchestrator] = {}
         for symbol in selected:
@@ -427,6 +576,8 @@ class MultiSymbolTradingManager:
         self.bots = next_bots
         self.portfolio.bots = self.bots
         self.portfolio.symbols = list(selected)
+        if universe_changed:
+            self.portfolio.invalidate_account()
         self.portfolio.db.save_trading_universe(
             mode=self.settings.mode,
             symbols=selected,

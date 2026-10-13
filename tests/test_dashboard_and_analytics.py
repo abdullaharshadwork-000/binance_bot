@@ -195,6 +195,9 @@ def test_dashboard_formats_execution_details_as_rows_instead_of_raw_json():
     assert "Position quantity" in DASHBOARD_HTML
     assert "Fill price" in DASHBOARD_HTML
     assert "Protection status" in DASHBOARD_HTML
+    assert "Fee basis" in DASHBOARD_HTML
+    assert "CONFIGURED-RATE ESTIMATE" in DASHBOARD_HTML
+    assert "Commission · ${esc(c.asset)}" in DASHBOARD_HTML
 
 
 def test_candlestick_chart_has_zoom_pan_and_fit_controls():

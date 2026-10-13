@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.agents.multi_orchestrator import MultiSymbolTradingManager
 from app.config import SUPPORTED_INTERVALS, get_settings
+from app.security import trading_control_denial_reason
 from app.strategy.indicators import ema
 from app.ui.dashboard import DASHBOARD_HTML
 
@@ -30,19 +31,17 @@ app = FastAPI(title="Agentic Binance Bot", version="0.7.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def local_control_only(request: Request, call_next):
-    """Fail closed if trading-control endpoints are reached from a remote client."""
+    """Restrict bot controls to same-origin localhost requests."""
     if request.url.path.startswith("/bot/"):
-        client_host = request.client.host if request.client else None
-        if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": (
-                        "Trading-control endpoints are localhost-only. "
-                        "Do not expose the dashboard as a public control API."
-                    )
-                },
-            )
+        reason = trading_control_denial_reason(
+            client_host=request.client.host if request.client else None,
+            host_header=request.headers.get("host"),
+            origin=request.headers.get("origin"),
+            sec_fetch_site=request.headers.get("sec-fetch-site"),
+            request_scheme=request.url.scheme,
+        )
+        if reason:
+            return JSONResponse(status_code=403, content={"detail": reason})
     return await call_next(request)
 
 

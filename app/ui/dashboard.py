@@ -489,8 +489,8 @@ function renderSymbolOverview(items,portfolio,universe){
   const holdings=Array.isArray(portfolio?.holdings)?portfolio.holdings:[];
   $('portfolioHoldings').textContent=portfolio?.equity==null
     ? 'Account holdings valuation is unavailable. '+(portfolio?.error||'Waiting for fresh balances and prices.')
-    : `Configured-coin holdings: bot positions ${money(portfolio?.managed_exposure)}; outside bot positions ${money(portfolio?.unmanaged_exposure)}. Both count toward the account exposure limit. `+
-      (holdings.length?holdings.map(h=>`${h.symbol}: ${num(h.quantity,8)} total, ${num(h.unmanaged_quantity,8)} outside bot positions`).join(' | '):'No holdings in configured coins.');
+    : `Selected and other account-asset holdings: bot positions ${money(portfolio?.managed_exposure)}; outside bot positions ${money(portfolio?.unmanaged_exposure)}. All priced non-quote holdings count toward exposure. `+
+      (holdings.length?holdings.map(h=>`${h.symbol}: ${num(h.quantity,8)} total, ${num(h.unmanaged_quantity,8)} outside bot positions`).join(' | '):'No non-quote holdings in selected markets or other valued assets.');
 
   const query=String($('marketSearch')?.value||'').trim().toUpperCase();
   const filter=$('marketFilter')?.value||'all';
@@ -559,6 +559,7 @@ function renderExecution(e){
   const d=e.details||{};
   const order=d.order||{};
   const protection=d.protection||{};
+  const feeValuation=d.fee_valuation||order._commission_quote_valuation;
   const detailRows=[
     d.trade_id!=null?row('Trade ID','#'+esc(d.trade_id)):null,
     d.client_order_id?row('Client order ID',esc(d.client_order_id)):null,
@@ -567,6 +568,12 @@ function renderExecution(e){
     d.recorded_position_qty!=null?row('Position quantity',num(d.recorded_position_qty,8)):null,
     d.fill_price!=null?row('Fill price',money(d.fill_price)):null,
     d.entry_fee_quote!=null?row('Entry fee',money(d.entry_fee_quote)):null,
+    d.exit_fee_quote!=null?row('Exit fee',money(d.exit_fee_quote)):null,
+    feeValuation?.quote_amount!=null?row(`Fee valuation · ${esc(feeValuation.quote_asset||quoteAsset)}`,money(feeValuation.quote_amount)):null,
+    feeValuation?row('Fee basis',badge(feeValuation.estimated?'CONFIGURED-RATE ESTIMATE':'REPORTED / CONVERTED',feeValuation.estimated?'amber':'green')):null,
+    feeValuation?.warning?row('Fee note',esc(feeValuation.warning)):null,
+    feeValuation?.unpriced_assets?.length?row('Unpriced fee assets',esc(feeValuation.unpriced_assets.join(', '))):null,
+    ...(Array.isArray(d.commissions)?d.commissions.filter(c=>c.asset).map(c=>row(`Commission · ${esc(c.asset)}`,num(c.amount,8))):[]),
     order.orderId!=null?row('Binance order ID',esc(order.orderId)):null,
     order.status?row('Order status',badge(esc(order.status),order.status==='FILLED'?'green':'blue')):null,
     protection.status?row('Protection status',badge(esc(protection.status),protection.status==='EXECUTING'?'green':'blue')):null,

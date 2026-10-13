@@ -161,6 +161,27 @@ def test_testnet_discovery_uses_testnet_markets_ranked_by_live_spot_turnover():
     asyncio.run(scenario())
 
 
+def test_asset_quote_pairs_resolve_direct_and_inverse_markets():
+    async def scenario():
+        client = BinanceClient(Settings(_env_file=None))
+        client._request = AsyncMock(return_value={"symbols": [
+            {"symbol": "BNBUSDT", "baseAsset": "BNB", "quoteAsset": "USDT", "status": "TRADING", "isSpotTradingAllowed": True},
+            {"symbol": "USDTTRY", "baseAsset": "USDT", "quoteAsset": "TRY", "status": "TRADING", "isSpotTradingAllowed": True},
+            {"symbol": "OLDUSDT", "baseAsset": "OLD", "quoteAsset": "USDT", "status": "BREAK", "isSpotTradingAllowed": True},
+            {"symbol": "FAKEUSDT", "baseAsset": "FAKE", "quoteAsset": "USDT", "status": "TRADING", "isSpotTradingAllowed": False},
+        ]})
+        pairs = await client.asset_quote_conversion_pairs(
+            ["BNB", "TRY", "OLD", "FAKE", "USDT"], "USDT"
+        )
+        assert pairs == {
+            "BNB": {"symbol": "BNBUSDT", "inverse": False},
+            "TRY": {"symbol": "USDTTRY", "inverse": True},
+        }
+        await client.close()
+
+    asyncio.run(scenario())
+
+
 def test_batch_ticker_prices_validates_and_maps_symbols():
     async def scenario():
         client = BinanceClient(Settings(_env_file=None))

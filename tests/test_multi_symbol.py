@@ -189,22 +189,32 @@ def test_unresolved_eth_order_does_not_block_btc_protective_reconciliation(tmp_p
             "listOrderStatus": "ALL_DONE",
             "orders": [
                 {
+                    "symbol": "BTCUSDT",
                     "orderId": 1002,
                     "clientOrderId": "btc-stop",
-                }
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "orderId": 1003,
+                    "clientOrderId": "btc-take-profit",
+                },
             ],
         })
-        exchange.get_order = AsyncMock(return_value={
-            "symbol": "BTCUSDT",
-            "orderId": 1002,
-            "clientOrderId": "btc-stop",
-            "status": "FILLED",
-            "type": "STOP_LOSS",
-            "side": "SELL",
-            "origQty": "0.00100000",
-            "executedQty": "0.00100000",
-            "price": "0.00000000",
-        })
+        async def btc_child_order(symbol, *, client_order_id):
+            is_stop = client_order_id == "btc-stop"
+            return {
+                "symbol": symbol,
+                "orderId": 1002 if is_stop else 1003,
+                "clientOrderId": client_order_id,
+                "status": "FILLED" if is_stop else "CANCELED",
+                "type": "STOP_LOSS" if is_stop else "LIMIT_MAKER",
+                "side": "SELL",
+                "origQty": "0.00100000",
+                "executedQty": "0.00100000" if is_stop else "0",
+                "price": "0.00000000" if is_stop else "110",
+            }
+
+        exchange.get_order = AsyncMock(side_effect=btc_child_order)
         exchange.my_trades = AsyncMock(return_value=[
             {
                 "symbol": "BTCUSDT",
