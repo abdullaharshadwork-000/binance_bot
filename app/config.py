@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     max_daily_loss_fraction: float = Field(default=0.01, gt=0, le=0.10)
     stop_loss_pct: float = Field(default=0.012, gt=0, le=0.10)
     take_profit_pct: float = Field(default=0.024, gt=0, le=0.30)
+    # Volatility-adaptive protection: scale stop/target distances from the
+    # signal candle ATR instead of fixed percentages. Falls back to the fixed
+    # percentages whenever the ATR feature is missing or not usable.
+    use_atr_stops: bool = False
+    atr_stop_multiplier: float = Field(default=2.0, ge=0.5, le=6.0)
+    atr_stop_min_pct: float = Field(default=0.006, gt=0, le=0.10)
+    atr_stop_max_pct: float = Field(default=0.05, gt=0, le=0.20)
     enable_trailing_stop: bool = True
     trailing_stop_activation_pct: float = Field(default=0.01, gt=0, le=0.20)
     trailing_stop_distance_pct: float = Field(default=0.008, gt=0, le=0.10)
@@ -129,6 +136,10 @@ class Settings(BaseSettings):
         if self.trailing_stop_distance_pct >= self.take_profit_pct:
             raise ValueError(
                 "TRAILING_STOP_DISTANCE_PCT must be smaller than TAKE_PROFIT_PCT"
+            )
+        if self.use_atr_stops and self.atr_stop_min_pct >= self.atr_stop_max_pct:
+            raise ValueError(
+                "ATR_STOP_MIN_PCT must be smaller than ATR_STOP_MAX_PCT"
             )
 
         for symbol in parsed_symbols:
