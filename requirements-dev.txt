@@ -1,0 +1,6 @@
+# Development and CI-only dependencies. Production deployments only need
+# requirements.txt; test/lint tooling is deliberately kept out of it.
+-r requirements.txt
+pytest==8.3.5
+ruff==0.17.0
+hypothesis==6.169.1

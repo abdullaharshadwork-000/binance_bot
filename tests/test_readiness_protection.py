@@ -1,9 +1,9 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import check_live_readiness as readiness
 from app.config import Settings
 from app.storage.db import TradingDB
-import check_live_readiness as readiness
 
 
 def _settings(tmp_path):

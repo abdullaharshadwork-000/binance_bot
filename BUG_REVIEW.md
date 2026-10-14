@@ -2,6 +2,47 @@
 
 > Historical snapshot reviewed 2026-09-23. The repository has changed since this review; findings, code locations, test counts, and conclusions below have not been re-audited against the current branch and must not be treated as a current risk assessment.
 
+## Re-audit addendum (2026-10-14)
+
+A follow-up pass against the current branch re-checked the 2026-09-23 findings
+and confirmed these items are fixed in current code:
+
+- **#9 (RSI NaN→50)** — rising series now reaches 100 (regression-tested).
+- **#12 (learning threshold cap below configured minimum)** — updates clamp to
+  `min_signal_confidence`; the 0.85 hard cap is gone.
+- **#13 (disabled learning still returning saved profile)** — disabled or
+  non-opted learning returns the default profile.
+- **#14 (MIN_TRADES_FOR_LEARNING dead zone above 200)** — the orchestrator now
+  feeds the full closed-trade history, not a 200-row cap.
+- **#21 (dashboard hides errors)** — `/status` folds `last_cycle.error`,
+  `strategy_error`, and reconciliation warnings into `engine_error`, shown in
+  the dashboard notice line.
+- **#23 (500-trade performance window)** — summaries read full history.
+- **#26 (no interval validation at startup)** — `Settings` rejects unsupported
+  intervals at configuration time.
+
+Fixed in the 2026-10-14 hardening pass (this branch):
+
+- Near-total absence of application logging: structured console logging added
+  across the orchestrator, broker, exchange client, and universe manager
+  (`LOG_LEVEL`).
+- No lint tooling: ruff configured (`ruff.toml`) and enforced in CI.
+- Test-only dependency (`pytest`) shipped in production requirements:
+  moved to `requirements-dev.txt` along with ruff and hypothesis.
+- Risk-math regression coverage relied on hand-picked examples: property-based
+  tests (hypothesis) added for stop/target bracketing, exposure caps, daily
+  loss limits, non-finite input handling, RSI bounds, and interval parsing.
+- Duplicate-imports-era residue: none found; import ordering now enforced.
+
+Open items deliberately not addressed in this pass:
+
+- `app/execution/broker.py` remains a single ~1,700-line module (maintainability).
+- The dashboard remains an embedded HTML/JS Python string (maintainability).
+- All operational blockers listed in `LIVE_TRADING_READINESS.md` remain.
+
+The original 2026-09-23 table below is preserved verbatim as a historical
+record; do not treat row status as current without re-verifying.
+
 Reviewed 2026-09-23. This is a code review and offline fault-injection audit, not a guarantee that every bug has been found. No real orders or credentialed API requests were made. Application code was not changed during this review. The existing suite passes: 11 tests.
 
 Evidence: **Reproduced** means an isolated Python check with temporary databases and mocked exchange methods demonstrated the behavior. **Code** means the defect follows from the inspected control flow; its end-to-end exchange/browser manifestation was not exercised.

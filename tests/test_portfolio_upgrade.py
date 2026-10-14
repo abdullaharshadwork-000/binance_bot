@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import UTC
 from unittest.mock import AsyncMock
 
 import pytest
@@ -293,13 +294,13 @@ def test_portfolio_loss_pause_blocks_entries_and_survives_restart(tmp_path):
 
 
 def test_loss_pause_expires_and_a_nonlosing_close_breaks_streak(tmp_path):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     m = manager(tmp_path)
     for symbol in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
         record_close(m, symbol, 99)
     with m.portfolio.db.connection() as conn:
         conn.execute("UPDATE trades SET closed_at=?", (
-            (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),))
+            (datetime.now(UTC) - timedelta(hours=2)).isoformat(),))
     assert m.portfolio.loss_pause_reason() is None
     record_close(m, "XRPUSDT", 99)
     assert m.portfolio.loss_pause_reason() is not None
@@ -338,6 +339,7 @@ def test_overexposure_is_visible_without_a_buy_attempt(tmp_path):
 
 def test_paper_launcher_isolates_state_and_disables_exchange_trading(monkeypatch):
     import os
+
     from run import configure_paper_mode
     monkeypatch.setattr(os, "environ", os.environ.copy())
     configure_paper_mode()

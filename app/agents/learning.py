@@ -1,6 +1,6 @@
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import Settings
@@ -98,7 +98,7 @@ class LearningAgent:
             last_win_rate=round(win_rate, 4),
             last_avg_pnl_pct=round(avg_pnl_pct, 6),
             samples=len(sample),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             last_trade_id=latest_trade_id,
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)

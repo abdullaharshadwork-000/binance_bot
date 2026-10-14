@@ -37,6 +37,12 @@ existing strategy score is a heuristic, not a measured probability of profit.
   insufficient depth, crossed books and excessive estimated price movement.
 - Fee/slippage sizing, portfolio exposure caps, stale-data guards, loss-streak
   pauses and the existing protective exit checks remain active.
+- Optional volatility-adaptive protection (`USE_ATR_STOPS=true`) scales entry
+  stop/target distances from the signal candle ATR, clamped around the
+  configured fixed distances, with fixed-percentage fallback on missing data.
+  A trend-flip strategy exit closes positions once price closes below both
+  EMAs even before momentum fully confirms. Decisions, orders, and warnings
+  are logged to the console under `LOG_LEVEL`.
 - Third-asset commissions are valued through an active direct/inverse Spot pair
   and a fresh batched quote price. If conversion is unavailable, the bot applies a
   configured-fee-rate estimate instead of treating the fee as zero; raw commission

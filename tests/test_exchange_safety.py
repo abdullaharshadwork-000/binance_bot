@@ -372,6 +372,7 @@ def test_bad_entry_liquidity_is_rejected():
 
 def test_database_enforces_only_one_open_trade_per_mode_symbol(tmp_path):
     import sqlite3
+
     import pytest
 
     db = TradingDB(str(tmp_path / "unique.db"))
@@ -998,7 +999,7 @@ def test_oco_submit_timeout_reconciles_by_same_client_id(tmp_path):
         )
         db = TradingDB(settings.database_path)
         db.init()
-        trade_id = db.open_trade(
+        db.open_trade(
             mode="testnet",
             symbol="BTCUSDT",
             quantity=0.001,

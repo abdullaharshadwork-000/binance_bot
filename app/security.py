@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-
 _LOCAL_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testserver"}
 
