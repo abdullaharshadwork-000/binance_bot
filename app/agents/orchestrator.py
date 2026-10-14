@@ -1,7 +1,8 @@
 import asyncio
-import time
+import logging
 import math
-from datetime import datetime, timezone
+import time
+from datetime import UTC, datetime
 
 from app.agents.learning import LearningAgent
 from app.agents.llm_advisor import LLMAdvisor
@@ -12,6 +13,8 @@ from app.models import RiskDecision, SignalSide, StrategySignal
 from app.risk.manager import RiskManager
 from app.storage.db import TradingDB
 from app.strategy.ensemble import EnsembleStrategy
+
+logger = logging.getLogger(__name__)
 
 
 def interval_to_ms(interval: str) -> int:
@@ -260,6 +263,36 @@ class TradingOrchestrator:
         self.cached_signal_price = float(result["signal_price"])
         self.cached_llm_adjustment = float(result["llm_adjustment"])
         self.cached_llm_reason = str(result["llm_reason"])
+        # Persist the completed-candle decision so future strategy research can
+        # correlate recorded features/outcomes with real trade results.
+        logged_signal = self.cached_signal
+        try:
+            self.db.record_signal(
+                mode=self.settings.mode,
+                symbol=self.settings.symbol,
+                interval=self.settings.interval,
+                side=logged_signal.side.value,
+                confidence=float(logged_signal.confidence),
+                reason=logged_signal.reason,
+                price=self.cached_signal_price,
+                candle_close_time=self.cached_signal_candle_close_time,
+                features=logged_signal.features,
+                entry_checks=logged_signal.entry_checks,
+                score_components=logged_signal.score_components,
+            )
+        except Exception as exc:  # logging must never break trading
+            logger.debug(
+                "%s signal log write failed: %s", self.settings.symbol, exc
+            )
+        logger.info(
+            "%s strategy %s conf=%.3f candle=%s price=%.8g: %s",
+            self.settings.symbol,
+            self.cached_signal.side.value,
+            self.cached_signal.confidence,
+            self.cached_signal_candle_close_time,
+            self.cached_signal_price,
+            self.cached_signal.reason,
+        )
         if (
             self.pending_strategy_result is not None
             and int(self.pending_strategy_result["candle_close_time"])
@@ -294,6 +327,11 @@ class TradingOrchestrator:
                 return self.pending_strategy_result
             except Exception as exc:
                 self.strategy_error = str(exc)
+                logger.warning(
+                    "%s forced strategy refresh failed: %s",
+                    self.settings.symbol,
+                    exc,
+                )
                 return None
             finally:
                 self.strategy_task = None
@@ -309,6 +347,9 @@ class TradingOrchestrator:
             return self.pending_strategy_result
         except Exception as exc:
             self.strategy_error = str(exc)
+            logger.warning(
+                "%s strategy refresh failed: %s", self.settings.symbol, exc
+            )
             return None
         finally:
             self.strategy_task = None
@@ -360,7 +401,7 @@ class TradingOrchestrator:
             return "Price moved too far from the strategy candle"
         closed = self.db.closed_trades(limit=1, mode=self.settings.mode, symbol=self.settings.symbol)
         if closed:
-            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(closed[0]["closed_at"])).total_seconds()
+            elapsed = (datetime.now(UTC) - datetime.fromisoformat(closed[0]["closed_at"])).total_seconds()
             if elapsed < self.settings.entry_cooldown_seconds:
                 return "Post-exit cooldown is active"
         return None
@@ -542,12 +583,12 @@ class TradingOrchestrator:
 
         if execution is not None and execution.action in {"BUY", "SELL"}:
             self.last_execution = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 **execution.__dict__,
             }
 
         result = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "mode": self.settings.mode,
             "symbol": self.settings.symbol,
             "interval": self.settings.interval,
@@ -587,8 +628,45 @@ class TradingOrchestrator:
                 self.settings.mode,
             ),
         }
+        self._log_cycle_outcome(execution, risk_decision, candidate_signal)
         self.last_cycle = result
         return result
+
+    def _log_cycle_outcome(
+        self,
+        execution,
+        risk_decision: RiskDecision | None,
+        candidate_signal: StrategySignal,
+    ) -> None:
+        """Log entries/exits at INFO and rejected entries at DEBUG."""
+        symbol = self.settings.symbol
+        if execution is not None and execution.action in {"BUY", "SELL"}:
+            level = logging.INFO if execution.success else logging.WARNING
+            logger.log(
+                level,
+                "%s %s %s: %s details=%s",
+                symbol,
+                "Executed" if execution.success else "Failed",
+                execution.action,
+                execution.message,
+                execution.details or {},
+            )
+        elif (
+            risk_decision is not None
+            and not risk_decision.allowed
+            and candidate_signal.side == SignalSide.BUY
+        ):
+            logger.debug(
+                "%s entry rejected: %s",
+                symbol,
+                risk_decision.reason,
+            )
+        if self.reconciliation_warning:
+            logger.warning(
+                "%s reconciliation warning: %s",
+                symbol,
+                self.reconciliation_warning,
+            )
 
     async def _cycle(self, force_strategy: bool = False) -> dict:
         async with self._cycle_lock:
@@ -711,7 +789,7 @@ class TradingOrchestrator:
                             )
 
             result = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "mode": self.settings.mode,
                 "symbol": self.settings.symbol,
                 "interval": self.settings.interval,
@@ -785,8 +863,11 @@ class TradingOrchestrator:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                logger.exception(
+                    "%s cycle failed: %s", self.settings.symbol, exc
+                )
                 self.last_cycle = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "error": str(exc),
                     "market_monitor": self.market_snapshot(),
                 }
@@ -810,6 +891,12 @@ class TradingOrchestrator:
                     self._price_stream_loop()
                 )
             self.task = asyncio.create_task(self._loop())
+            logger.info(
+                "%s engine started (mode=%s interval=%s)",
+                self.settings.symbol,
+                self.settings.mode,
+                self.settings.interval,
+            )
             return True
 
     async def stop(self) -> bool:
@@ -817,6 +904,7 @@ class TradingOrchestrator:
             if not self.running:
                 return False
             self.running = False
+            logger.info("%s engine stopping", self.settings.symbol)
 
             tasks = [
                 self.task,
