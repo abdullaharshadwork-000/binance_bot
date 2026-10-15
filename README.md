@@ -24,6 +24,7 @@ A conservative Binance Spot trading bot with a simple dashboard, paper/testnet/l
 - **Volatility-adaptive stops (optional, off by default):** with `USE_ATR_STOPS=true`, entry stop/target distances are scaled from the signal candle's ATR instead of fixed percentages. Distances are clamped around the configured fixed stop (half to double, plus absolute `ATR_STOP_MIN_PCT`/`ATR_STOP_MAX_PCT` bounds) and preserve the configured reward-to-risk ratio. Position sizing uses the scaled stop distance. Missing or invalid ATR data falls back to the fixed percentages.
 - **Trend-flip exit:** an open position is exited once price closes below both EMAs, even if short-term momentum has not yet turned negative. This caps the previous requirement of a fully confirmed bearish trend before any strategy exit.
 - **Decision logging:** every completed-candle strategy decision (side, confidence, reason, features, entry checks, score components) is persisted to the `signal_log` table for later research. It does not affect trading behavior.
+- **Signal analytics report:** `python signal_report.py` joins logged BUY signals to the trades they produced and reports win rate by confidence bucket, ADX, ATR%, volume ratio, and exit reason — read-only, works on any bot database copy. See "Signal analytics report" below.
 - **Structured console logging:** engine start/stop, strategy results, order submissions, entries/exits, reconciliation warnings, rate-limit cooldowns, and cycle failures are logged under `LOG_LEVEL` (default `INFO`).
 - **Walk-forward research mode:** `python compare_strategy_intervals.py --walk-forward` optimizes the ADX/volume entry filters on one time fold and evaluates them untouched on the next, reporting out-of-sample results next to the current-configuration baseline. Out-of-sample results on a few folds are weak evidence; treat them as a discipline against overfitting, not a profitability proof.
 
@@ -599,3 +600,43 @@ Interpretation guidance:
   drawing conclusions.
 - The tool is research-only: it never places orders and never changes the
   running bot configuration.
+
+### Signal analytics report
+
+The `signal_log` table records every completed-candle decision. The read-only
+analyzer attributes each closed trade to the newest BUY signal logged for the
+same symbol/mode within a configurable window (default 30 minutes, matching
+the live engine's fresh-candle entry discipline) and aggregates outcomes:
+
+```powershell
+python signal_report.py
+python signal_report.py --symbol ETHUSDT --mode paper
+python signal_report.py --database data/paper_validation.db --max-signal-age-minutes 60
+```
+
+The JSON report shows overall win rate/average PnL plus win rates bucketed by
+signal confidence, ADX, signal-candle ATR%, volume ratio, and exit reason.
+Use it to see which entry filters actually separate winners from losers in
+your own collected history. Treat small samples skeptically: descriptive
+statistics are not causation, and none of this establishes live readiness.
+
+### Simulating and tuning ATR stops in historical research
+
+`compare_strategy_intervals.py` now simulates the same volatility-adaptive
+stops the live risk engine applies: when `USE_ATR_STOPS=true`, each simulated
+entry's stop/target distances are scaled from the qualifying signal candle's
+ATR using `RiskManager` (clamped, reward:risk preserved). Every recorded
+trade includes the applied `stop_pct`/`take_profit_pct`, and the report's
+`strategy_parameters` include the ATR settings.
+
+The walk-forward grid also tunes stop mode: `use_atr_stops: false/true` is
+optimized alongside the ADX/volume filters, so each fold reports whether the
+out-of-sample winner used fixed or ATR-scaled stops:
+
+```powershell
+python compare_strategy_intervals.py --walk-forward --days 14 --wf-folds 4
+```
+
+Consistent selection of one stop mode across folds — with matching
+out-of-sample performance — is meaningful evidence; flip-flopping between
+modes fold to fold means the data cannot yet distinguish them.

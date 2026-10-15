@@ -947,6 +947,32 @@ class TradingDB:
                 ),
             )
 
+    def list_signals(
+        self,
+        *,
+        mode: str,
+        symbol: str,
+        side: str | None = None,
+        limit: int = 10000,
+    ) -> list[dict]:
+        """Return logged strategy decisions, newest first."""
+        clauses = ["mode=?", "symbol=?"]
+        params: list[Any] = [mode, symbol]
+        if side is not None:
+            clauses.append("side=?")
+            params.append(side)
+        params.append(limit)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM signal_log
+                WHERE {' AND '.join(clauses)}
+                ORDER BY id DESC LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def signal_stats(self, *, mode: str, symbol: str) -> dict:
         """Summarize logged signals; joins closed trades for outcome win rates."""
         with self.connection() as conn:
