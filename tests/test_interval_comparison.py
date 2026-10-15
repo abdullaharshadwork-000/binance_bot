@@ -358,7 +358,11 @@ def test_walk_forward_symbol_reports_folds_and_totals():
         assert "skipped" not in report
         assert report["train_candles"] >= comparison.WF_MIN_SEGMENT_CANDLES
         assert report["test_candles"] >= comparison.WF_MIN_SEGMENT_CANDLES
-        assert set(report["best_params"]) == {"strategy_min_adx", "strategy_min_volume_ratio"}
+        assert set(report["best_params"]) == {
+            "strategy_min_adx",
+            "strategy_min_volume_ratio",
+            "use_atr_stops",
+        }
     # Baseline out-of-sample PnL is always computed with the current config.
     assert isinstance(result["baseline_oos_stress_pnl"], float)
     assert (
@@ -381,3 +385,87 @@ def test_walk_forward_symbol_skips_undersized_segments():
     )
     assert all("skipped" in report for report in result["fold_reports"])
     assert result["optimized_oos_trades"] == 0
+
+
+class _ControlledStrategy:
+    """Fake strategy with a configurable signal-candle ATR feature.
+
+    Always BUYs when flat and holds while in position so that simulated exits
+    come from the protective stops, not from strategy signals.
+    """
+
+    def __init__(self, atr_pct):
+        self.atr_pct = atr_pct
+
+    def evaluate(self, history, has_position):
+        if has_position:
+            return StrategySignal(SignalSide.HOLD, 0.0, "fake hold")
+        return StrategySignal(
+            SignalSide.BUY,
+            0.9,
+            "fake entry",
+            features={"atr_pct": self.atr_pct},
+        )
+
+
+def _entry_control_candles(n=70):
+    import numpy as np
+
+    close = np.full(n, 100.0)
+    close[62] = 99.0   # 1% dip after entry: hits a 0.8% ATR stop, misses the 1.2% fixed stop
+    close[63:] = 103.0
+    interval_ms = 15 * 60 * 1000
+    open_times = np.arange(n, dtype=np.int64) * interval_ms
+    return pd.DataFrame({
+        "open_time": open_times,
+        "open": close,
+        "high": close * 1.001,
+        "low": close * 0.999,
+        "close": close,
+        "volume": np.full(n, 1000.0),
+        "close_time": open_times + interval_ms - 1,
+    })
+
+
+def test_backtest_simulates_atr_scaled_stops(monkeypatch):
+    settings = _settings().model_copy(update={
+        "enable_trailing_stop": False,
+        "entry_cooldown_seconds": 0,
+        "use_atr_stops": True,
+        "atr_stop_multiplier": 2.0,
+    })
+    # Low-volatility signal candle -> 2 x 0.4% = 0.8% stop (vs 1.2% fixed).
+    monkeypatch.setattr(comparison, "EnsembleStrategy", lambda **_: _ControlledStrategy(0.004))
+
+    atr_result = comparison.backtest_frame(
+        _entry_control_candles(), settings=settings, interval="15m",
+        symbol="BTCUSDT", notional=3000.0, extra_stress_slippage_bps=0.0,
+    )
+    fixed_result = comparison.backtest_frame(
+        _entry_control_candles(),
+        settings=settings.model_copy(update={"use_atr_stops": False}),
+        interval="15m", symbol="BTCUSDT", notional=3000.0,
+        extra_stress_slippage_bps=0.0,
+    )
+
+    atr_trades = atr_result["trades"]
+    assert atr_trades, "expected at least one simulated trade"
+    assert atr_trades[0]["stop_pct"] == pytest.approx(0.008)
+    assert atr_trades[0]["reason"] == "Stop loss"
+
+    assert fixed_result["trades"], "expected at least one simulated trade"
+    assert fixed_result["trades"][0]["stop_pct"] == pytest.approx(settings.stop_loss_pct)
+    assert fixed_result["trades"][0]["reason"] != "Stop loss"
+
+
+def test_backtest_atr_stops_missing_feature_falls_back_to_fixed(monkeypatch):
+    settings = _settings().model_copy(update={
+        "enable_trailing_stop": False,
+        "use_atr_stops": True,
+    })
+    monkeypatch.setattr(comparison, "EnsembleStrategy", lambda **_: _ControlledStrategy(None))
+    result = comparison.backtest_frame(
+        _entry_control_candles(), settings=settings, interval="15m",
+        symbol="BTCUSDT", notional=3000.0, extra_stress_slippage_bps=0.0,
+    )
+    assert result["trades"][0]["stop_pct"] == pytest.approx(settings.stop_loss_pct)

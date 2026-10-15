@@ -16,6 +16,7 @@ import pandas as pd
 
 from app.config import Settings
 from app.models import SignalSide
+from app.risk.manager import RiskManager
 from app.storage.db import TradingDB
 from app.strategy.ensemble import EnsembleStrategy
 
@@ -261,6 +262,8 @@ class Position:
     stop: float
     take_profit: float
     high_water: float
+    stop_pct: float
+    take_profit_pct: float
 
 
 def summarize(pnls: list[float]) -> dict[str, Any]:
@@ -378,9 +381,13 @@ def backtest_frame(
 
     position: Position | None = None
     pending_entry = False
+    # Stop/target fractions (fractions of price) captured from the qualifying
+    # signal candle. ATR-scaled when enabled, mirroring the live RiskManager.
+    pending_stop_pcts: tuple[float, float] | None = None
     pending_strategy_exit = False
     last_exit_time: int | None = None
     trades: list[dict[str, Any]] = []
+    risk_manager = RiskManager(settings)
 
     def close_position(exit_market: float, exit_time: int, reason: str) -> None:
         nonlocal position, pending_strategy_exit, last_exit_time
@@ -400,6 +407,8 @@ def backtest_frame(
                 "entry_price": position.entry_market,
                 "exit_price": exit_market,
                 "reason": reason,
+                "stop_pct": position.stop_pct,
+                "take_profit_pct": position.take_profit_pct,
                 **costs,
             }
         )
@@ -422,15 +431,22 @@ def backtest_frame(
             ):
                 entry_market = float(candle.open)
                 entry_fill = entry_market * (1 + slip_rate)
+                stop_pct, take_pct = pending_stop_pcts or (
+                    settings.stop_loss_pct,
+                    settings.take_profit_pct,
+                )
                 position = Position(
                     entry_market=entry_market,
                     entry_fill=entry_fill,
                     entry_time=int(candle.open_time),
-                    stop=entry_fill * (1 - settings.stop_loss_pct),
-                    take_profit=entry_fill * (1 + settings.take_profit_pct),
+                    stop=entry_fill * (1 - stop_pct),
+                    take_profit=entry_fill * (1 + take_pct),
                     high_water=entry_fill,
+                    stop_pct=stop_pct,
+                    take_profit_pct=take_pct,
                 )
             pending_entry = False
+            pending_stop_pcts = None
 
         if position is not None:
             low = float(candle.low)
@@ -480,6 +496,7 @@ def backtest_frame(
             and i + 1 < len(frame)
         ):
             pending_entry = True
+            pending_stop_pcts = risk_manager.atr_scaled_stop_distances(signal)
 
     if position is not None:
         close_position(float(frame.iloc[-1].close), int(frame.iloc[-1].close_time), "End of sample")
@@ -588,6 +605,10 @@ async def build_comparison(
             "min_signal_confidence": settings.min_signal_confidence,
             "stop_loss_pct": settings.stop_loss_pct,
             "take_profit_pct": settings.take_profit_pct,
+            "use_atr_stops": settings.use_atr_stops,
+            "atr_stop_multiplier": settings.atr_stop_multiplier,
+            "atr_stop_min_pct": settings.atr_stop_min_pct,
+            "atr_stop_max_pct": settings.atr_stop_max_pct,
             "trailing_stop_enabled": settings.enable_trailing_stop,
             "breakeven_activation_pct": settings.breakeven_activation_pct,
             "trailing_stop_activation_pct": settings.trailing_stop_activation_pct,
@@ -621,6 +642,7 @@ async def build_comparison(
 WF_GRID: dict[str, tuple[float, ...]] = {
     "strategy_min_adx": (12.0, 16.0, 20.0),
     "strategy_min_volume_ratio": (0.6, 0.75, 0.9),
+    "use_atr_stops": (False, True),
 }
 WF_MIN_SEGMENT_CANDLES = 62  # backtest_frame warmup (60) + minimum evaluation room
 
