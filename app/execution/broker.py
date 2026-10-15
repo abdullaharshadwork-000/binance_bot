@@ -1,13 +1,16 @@
-import uuid
-import math
 import json
+import logging
+import math
 import time
+import uuid
 from decimal import Decimal
 
 from app.config import Settings
 from app.exchange.binance import BinanceClient
 from app.models import ExecutionResult, RiskDecision, SignalSide, StrategySignal
 from app.storage.db import TradingDB
+
+logger = logging.getLogger(__name__)
 
 
 class Broker:
@@ -98,6 +101,13 @@ class Broker:
 
     async def _submit_market_order(self, side: str, qty: float) -> tuple[dict, str, float]:
         client_order_id = self._new_client_order_id(side)
+        logger.info(
+            "%s submitting %s market order qty=%g id=%s",
+            self.settings.symbol,
+            side,
+            qty,
+            client_order_id,
+        )
         self.db.record_order_intent(
             mode=self.settings.mode,
             symbol=self.settings.symbol,
@@ -131,6 +141,14 @@ class Broker:
                     commission_quote=0.0,
                     commission_details=[],
                 )
+                logger.error(
+                    "%s order outcome uncertain id=%s; re-submission blocked "
+                    "(submit error: %s; reconcile error: %s)",
+                    self.settings.symbol,
+                    client_order_id,
+                    submit_error,
+                    reconcile_error,
+                )
                 raise RuntimeError(
                     "Order outcome is uncertain. Automatic re-submission was blocked; "
                     f"manual/restart reconciliation is required. Submit error: {submit_error}; "
@@ -139,6 +157,11 @@ class Broker:
 
         if (order.get("symbol") != self.settings.symbol or order.get("side") != side
                 or order.get("clientOrderId") != client_order_id):
+            logger.error(
+                "%s order response identity mismatch id=%s; recovery required",
+                self.settings.symbol,
+                client_order_id,
+            )
             raise RuntimeError("Order response identity mismatch; recovery is required")
         executed_qty = self.exchange.executed_quantity(order)
         if not math.isfinite(executed_qty) or executed_qty < 0 or executed_qty > qty * (1 + 1e-10):

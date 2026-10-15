@@ -1,5 +1,5 @@
-from decimal import Decimal
 import math
+from decimal import Decimal
 
 from app.config import Settings
 from app.models import RiskDecision, SignalSide, StrategySignal
@@ -8,6 +8,40 @@ from app.models import RiskDecision, SignalSide, StrategySignal
 class RiskManager:
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    def atr_scaled_stop_distances(self, signal: StrategySignal) -> tuple[float, float] | None:
+        """Return (stop_pct, take_profit_pct) scaled from the signal candle ATR.
+
+        Distances expand in volatile markets and tighten in quiet ones, bounded
+        around the configured fixed percentages. The configured reward-to-risk
+        ratio is preserved. Returns None (use fixed distances) when ATR stops
+        are disabled or the signal carries no usable ATR feature.
+        """
+        if not self.settings.use_atr_stops:
+            return None
+        raw = signal.features.get("atr_pct") if signal.features else None
+        if raw is None:
+            return None
+        try:
+            atr_pct = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(atr_pct) or atr_pct <= 0:
+            return None
+
+        fixed_stop = self.settings.stop_loss_pct
+        stop_pct = self.settings.atr_stop_multiplier * atr_pct
+        # Clamp around the configured fixed stop: never tighter than half or
+        # wider than double the configured distance, plus absolute bounds.
+        stop_pct = min(
+            max(stop_pct, fixed_stop / 2, self.settings.atr_stop_min_pct),
+            fixed_stop * 2,
+            self.settings.atr_stop_max_pct,
+        )
+        # Preserve the configured reward-to-risk ratio; respect the hard cap.
+        take_pct = min(stop_pct * (self.settings.take_profit_pct / fixed_stop), 0.30)
+        return stop_pct, take_pct
+
 
     def evaluate_entry(
         self,
@@ -41,6 +75,10 @@ class RiskManager:
 
         stop_pct = Decimal(str(self.settings.stop_loss_pct))
         take_pct = Decimal(str(self.settings.take_profit_pct))
+        scaled = self.atr_scaled_stop_distances(signal)
+        if scaled is not None:
+            stop_pct = Decimal(str(scaled[0]))
+            take_pct = Decimal(str(scaled[1]))
         risk_pct = Decimal(str(self.settings.risk_per_trade))
         exposure_pct = Decimal(str(self.settings.max_position_fraction))
         multiplier = Decimal(str(max(0.5, min(risk_multiplier, 1.0))))

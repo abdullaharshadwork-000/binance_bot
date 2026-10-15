@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import math
 import sys
@@ -17,7 +18,6 @@ from app.config import Settings
 from app.models import SignalSide
 from app.storage.db import TradingDB
 from app.strategy.ensemble import EnsembleStrategy
-
 
 INTERVALS = ("1m", "3m", "5m", "15m")
 PUBLIC_BINANCE = "https://api.binance.com"
@@ -618,6 +618,197 @@ async def build_comparison(
     }
 
 
+WF_GRID: dict[str, tuple[float, ...]] = {
+    "strategy_min_adx": (12.0, 16.0, 20.0),
+    "strategy_min_volume_ratio": (0.6, 0.75, 0.9),
+}
+WF_MIN_SEGMENT_CANDLES = 62  # backtest_frame warmup (60) + minimum evaluation room
+
+
+def _wf_variant(settings: Settings, overrides: dict[str, float]) -> Settings:
+    return settings.model_copy(update=overrides)
+
+
+def _wf_slices(total: int, folds: int, warmup: int = 60) -> list[tuple[int, int]]:
+    """Split the usable candle range (after warmup) into `folds` contiguous segments."""
+    usable = total - warmup
+    seg = usable // folds
+    return [
+        (warmup + i * seg, warmup + (i + 1) * seg if i < folds - 1 else total)
+        for i in range(folds)
+    ]
+
+
+def walk_forward_symbol(
+    frame: pd.DataFrame,
+    *,
+    settings: Settings,
+    interval: str,
+    symbol: str,
+    notional: float,
+    extra_stress_slippage_bps: float,
+    folds: int,
+    grid: dict[str, tuple[float, ...]] | None = None,
+) -> dict[str, Any]:
+    """Classic walk-forward: optimize parameters on one fold, trade the next.
+
+    For each adjacent fold pair, the grid is scored on the training segment
+    (stress-adjusted PnL) and the winning parameters are evaluated untouched
+    on the following test segment. The current configured parameters are also
+    evaluated out-of-sample as a baseline, so the report shows whether
+    optimization adds anything over doing nothing clever.
+    """
+    grid = grid or WF_GRID
+    keys = sorted(grid)
+    combos = [
+        dict(zip(keys, values, strict=True))
+        for values in itertools.product(*(grid[k] for k in keys))
+    ]
+    slices = _wf_slices(len(frame), folds)
+
+    fold_reports: list[dict[str, Any]] = []
+    optimized_oos_total = 0.0
+    optimized_oos_trades = 0
+    baseline_oos_total = 0.0
+    baseline_oos_trades = 0
+
+    for f in range(1, len(slices)):
+        train_start, train_end = slices[f - 1]
+        test_start, test_end = slices[f]
+        train = frame.iloc[train_start:train_end]
+        test = frame.iloc[test_start:test_end]
+        if len(train) < WF_MIN_SEGMENT_CANDLES or len(test) < WF_MIN_SEGMENT_CANDLES:
+            fold_reports.append({
+                "fold": f,
+                "skipped": "Segment too short for a reliable simulation",
+            })
+            continue
+
+        scored = []
+        for combo in combos:
+            variant = _wf_variant(settings, combo)
+            result = backtest_frame(
+                train,
+                settings=variant,
+                interval=interval,
+                symbol=symbol,
+                notional=notional,
+                extra_stress_slippage_bps=extra_stress_slippage_bps,
+            )
+            scored.append((result["stress_adjusted"]["total_pnl"], result["trades"], combo))
+
+        best_pnl, best_is_trades, best_combo = max(scored, key=lambda item: item[0])
+        oos = backtest_frame(
+            test,
+            settings=_wf_variant(settings, best_combo),
+            interval=interval,
+            symbol=symbol,
+            notional=notional,
+            extra_stress_slippage_bps=extra_stress_slippage_bps,
+        )
+        baseline = backtest_frame(
+            test,
+            settings=settings,
+            interval=interval,
+            symbol=symbol,
+            notional=notional,
+            extra_stress_slippage_bps=extra_stress_slippage_bps,
+        )
+        optimized_oos_total += oos["stress_adjusted"]["total_pnl"]
+        optimized_oos_trades += oos["stress_adjusted"]["trades"]
+        baseline_oos_total += baseline["stress_adjusted"]["total_pnl"]
+        baseline_oos_trades += baseline["stress_adjusted"]["trades"]
+        fold_reports.append({
+            "fold": f,
+            "train_candles": len(train),
+            "test_candles": len(test),
+            "best_params": best_combo,
+            "in_sample_stress_pnl": round(best_pnl, 4),
+            "in_sample_trades": best_is_trades,
+            "out_of_sample_stress_pnl": round(oos["stress_adjusted"]["total_pnl"], 4),
+            "out_of_sample_trades": oos["stress_adjusted"]["trades"],
+            "baseline_out_of_sample_stress_pnl": round(
+                baseline["stress_adjusted"]["total_pnl"], 4
+            ),
+        })
+
+    return {
+        "symbol": symbol,
+        "interval": interval,
+        "candles": len(frame),
+        "folds": folds,
+        "grid": {key: list(values) for key, values in grid.items()},
+        "fold_reports": fold_reports,
+        "optimized_oos_stress_pnl": round(optimized_oos_total, 4),
+        "optimized_oos_trades": optimized_oos_trades,
+        "baseline_oos_stress_pnl": round(baseline_oos_total, 4),
+        "baseline_oos_trades": baseline_oos_trades,
+    }
+
+
+async def build_walk_forward(
+    settings: Settings,
+    *,
+    days: int,
+    interval: str,
+    notional: float,
+    extra_stress_slippage_bps: float,
+    folds: int,
+    grid: dict[str, tuple[float, ...]] | None = None,
+) -> dict[str, Any]:
+    symbols = symbols_for_comparison(settings)
+    timeout = httpx.Timeout(connect=15.0, read=60.0, write=20.0, pool=20.0)
+    limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
+    async with httpx.AsyncClient(
+        base_url=PUBLIC_BINANCE,
+        timeout=timeout,
+        limits=limits,
+        follow_redirects=True,
+    ) as client:
+        results = []
+        for symbol in symbols:
+            print(f"Fetching {symbol} {interval} ({days} days)...", file=sys.stderr, flush=True)
+            frame = await fetch_history(client, symbol=symbol, interval=interval, days=days)
+            print(f"Walk-forward on {symbol} ({len(frame)} candles)...", file=sys.stderr, flush=True)
+            results.append(
+                walk_forward_symbol(
+                    frame,
+                    settings=settings,
+                    interval=interval,
+                    symbol=symbol,
+                    notional=notional,
+                    extra_stress_slippage_bps=extra_stress_slippage_bps,
+                    folds=folds,
+                    grid=grid,
+                )
+            )
+
+    optimized = sum(item["optimized_oos_stress_pnl"] for item in results)
+    baseline = sum(item["baseline_oos_stress_pnl"] for item in results)
+    return {
+        "source": "Binance Spot public historical klines",
+        "mode": "walk_forward",
+        "symbols": symbols,
+        "interval": interval,
+        "days": days,
+        "notional_per_trade": notional,
+        "grid": {key: list(values) for key, values in (grid or WF_GRID).items()},
+        "folds": folds,
+        "totals": {
+            "optimized_out_of_sample_stress_pnl": round(optimized, 4),
+            "baseline_out_of_sample_stress_pnl": round(baseline, 4),
+            "advantage_of_optimization": round(optimized - baseline, 4),
+        },
+        "symbols_results": results,
+        "limitations": [
+            "Walk-forward optimization re-fits parameters per fold; it reduces but does not remove overfitting risk.",
+            "A positive out-of-sample result on a few folds is weak evidence; many folds and regimes are required.",
+            "This is a candle-based research backtest, not an execution simulator; entries/exits assume the next candle open.",
+            "Historical performance does not establish future profitability or live-readiness.",
+        ],
+    }
+
+
 def main() -> int:
     settings = Settings()
     parser = argparse.ArgumentParser(
@@ -641,6 +832,25 @@ def main() -> int:
         default=2.0,
         help="Extra slippage per side for the stress scenario (default: 2 bps).",
     )
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help=(
+            "Optimize the entry filters on each training fold and evaluate them "
+            "on the next fold (single interval; see --wf-interval)."
+        ),
+    )
+    parser.add_argument(
+        "--wf-folds",
+        type=int,
+        default=3,
+        help="Number of contiguous walk-forward folds (default: 3).",
+    )
+    parser.add_argument(
+        "--wf-interval",
+        default="15m",
+        help="Interval used for walk-forward mode (default: 15m).",
+    )
     args = parser.parse_args()
 
     if args.days <= 0:
@@ -649,6 +859,8 @@ def main() -> int:
         parser.error("--notional must be a positive finite number")
     if args.stress_slippage_bps < 0 or not math.isfinite(args.stress_slippage_bps):
         parser.error("--stress-slippage-bps must be non-negative")
+    if args.wf_folds < 2 or args.wf_folds > 10:
+        parser.error("--wf-folds must be between 2 and 10")
 
     intervals = tuple(x.strip() for x in args.intervals.split(",") if x.strip())
     unsupported = [x for x in intervals if x not in INTERVALS]
@@ -659,6 +871,25 @@ def main() -> int:
             + ". Unsupported: "
             + ", ".join(unsupported)
         )
+
+    if args.walk_forward:
+        wf_interval = args.wf_interval.strip()
+        if wf_interval not in INTERVALS:
+            parser.error(
+                "--wf-interval must be one of: " + ", ".join(INTERVALS)
+            )
+        report = asyncio.run(
+            build_walk_forward(
+                settings,
+                days=args.days,
+                interval=wf_interval,
+                notional=args.notional,
+                extra_stress_slippage_bps=args.stress_slippage_bps,
+                folds=args.wf_folds,
+            )
+        )
+        print(json.dumps(report, indent=2))
+        return 0
 
     report = asyncio.run(
         build_comparison(

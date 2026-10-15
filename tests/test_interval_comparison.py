@@ -311,3 +311,73 @@ def test_history_checkpoint_round_trip(tmp_path, monkeypatch):
     assert cursor == 123
     assert end_ms == now_ms
     assert complete is False
+
+
+def _wf_candles(n=600, seed=7):
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    steps = rng.normal(loc=0.0005, scale=0.01, size=n)
+    close = 100 * np.exp(np.cumsum(steps))
+    interval_ms = 15 * 60 * 1000
+    open_times = np.arange(n, dtype=np.int64) * interval_ms
+    return pd.DataFrame({
+        "open_time": open_times,
+        "open": close * (1 - 0.0005),
+        "high": close * 1.004,
+        "low": close * 0.996,
+        "close": close,
+        "volume": rng.uniform(900, 1100, n),
+        "close_time": open_times + interval_ms - 1,
+    })
+
+
+def test_wf_slices_cover_frame_and_respect_warmup():
+    slices = comparison._wf_slices(603, folds=3)
+    assert slices[0][0] == 60
+    assert slices[-1][1] == 603
+    for (_, start_end_prev), (start, _) in zip(slices, slices[1:], strict=False):
+        assert start == start_end_prev
+
+
+def test_walk_forward_symbol_reports_folds_and_totals():
+    settings = _settings()
+    frame = _wf_candles()
+    result = comparison.walk_forward_symbol(
+        frame,
+        settings=settings,
+        interval="15m",
+        symbol="BTCUSDT",
+        notional=3000.0,
+        extra_stress_slippage_bps=2.0,
+        folds=3,
+    )
+    assert result["symbol"] == "BTCUSDT"
+    assert len(result["fold_reports"]) == 2
+    for report in result["fold_reports"]:
+        assert "skipped" not in report
+        assert report["train_candles"] >= comparison.WF_MIN_SEGMENT_CANDLES
+        assert report["test_candles"] >= comparison.WF_MIN_SEGMENT_CANDLES
+        assert set(report["best_params"]) == {"strategy_min_adx", "strategy_min_volume_ratio"}
+    # Baseline out-of-sample PnL is always computed with the current config.
+    assert isinstance(result["baseline_oos_stress_pnl"], float)
+    assert (
+        result["optimized_oos_stress_pnl"]
+        == pytest.approx(sum(r["out_of_sample_stress_pnl"] for r in result["fold_reports"]))
+    )
+
+
+def test_walk_forward_symbol_skips_undersized_segments():
+    settings = _settings()
+    frame = _wf_candles(n=130)
+    result = comparison.walk_forward_symbol(
+        frame,
+        settings=settings,
+        interval="15m",
+        symbol="BTCUSDT",
+        notional=3000.0,
+        extra_stress_slippage_bps=2.0,
+        folds=3,
+    )
+    assert all("skipped" in report for report in result["fold_reports"])
+    assert result["optimized_oos_trades"] == 0

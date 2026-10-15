@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any

@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +91,25 @@ class TradingDB:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS signal_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    interval TEXT NOT NULL,
+                    candle_close_time INTEGER,
+                    side TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    price REAL,
+                    reason TEXT,
+                    features TEXT,
+                    entry_checks TEXT,
+                    score_components TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_signal_log_mode_symbol
+                ON signal_log(mode, symbol, id);
                 """
             )
             # Forward-compatible migration for databases created before trailing
@@ -166,7 +185,7 @@ class TradingDB:
         state_updates: dict[str, Any] | None = None,
         client_order_id: str | None = None,
     ) -> int:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self.connection() as conn:
             if client_order_id is not None:
                 self._apply_order_conn(conn, client_order_id, "BUY", mode, symbol)
@@ -301,7 +320,7 @@ class TradingDB:
             pnl = gross - allocated_entry_fee - delta_fee
             cost = float(row["entry_price"]) * sold_qty
             pnl_pct = pnl / cost if cost > 0 else 0.0
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             remaining = max(0.0, position_qty - sold_qty)
 
             if remaining > tolerance:
@@ -452,7 +471,7 @@ class TradingDB:
             pnl = gross - allocated_entry_fee - float(exit_fee)
             cost = float(row["entry_price"]) * sold_qty
             pnl_pct = pnl / cost if cost > 0 else 0.0
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
 
             if state_updates:
                 for key, value in state_updates.items():
@@ -609,7 +628,7 @@ class TradingDB:
     ) -> float:
         if not symbols:
             return 0.0
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         placeholders = ",".join("?" for _ in symbols)
         params: list[Any] = [mode, *symbols, today]
         with self.connection() as conn:
@@ -627,7 +646,7 @@ class TradingDB:
             return float(row["total"] or 0.0)
 
     def realized_pnl_today(self, *, mode: str, symbol: str) -> float:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         with self.connection() as conn:
             row = conn.execute(
                 """
@@ -672,7 +691,7 @@ class TradingDB:
         peak = 0.0
         max_drawdown = 0.0
         curve = []
-        for trade, pnl in zip(trades, pnls):
+        for trade, pnl in zip(trades, pnls, strict=True):
             cumulative += pnl
             peak = max(peak, cumulative)
             max_drawdown = max(max_drawdown, peak - cumulative)
@@ -731,7 +750,7 @@ class TradingDB:
         side: str,
         requested_quantity: float,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             pending = conn.execute(
@@ -779,7 +798,7 @@ class TradingDB:
         commission_quote: float,
         commission_details: list[dict] | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self.connection() as conn:
             cur = conn.execute(
                 """
@@ -876,3 +895,79 @@ class TradingDB:
             str(row["symbol"]) for row in [*positions, *pending]
             if row["symbol"]
         ))
+
+    def record_signal(
+        self,
+        *,
+        mode: str,
+        symbol: str,
+        interval: str,
+        side: str,
+        confidence: float,
+        reason: str | None = None,
+        price: float | None = None,
+        candle_close_time: int | None = None,
+        features: dict | None = None,
+        entry_checks: dict | None = None,
+        score_components: dict | None = None,
+    ) -> None:
+        """Persist one completed-candle strategy decision for later research."""
+        import json
+
+        def dump(payload: dict | None) -> str | None:
+            if not payload:
+                return None
+            try:
+                return json.dumps(payload, default=float)
+            except (TypeError, ValueError):
+                return None
+
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO signal_log (
+                    created_at, mode, symbol, interval, candle_close_time,
+                    side, confidence, price, reason,
+                    features, entry_checks, score_components
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    datetime.now(UTC).isoformat(),
+                    mode,
+                    symbol,
+                    interval,
+                    candle_close_time,
+                    side,
+                    float(confidence),
+                    price,
+                    reason,
+                    dump(features),
+                    dump(entry_checks),
+                    dump(score_components),
+                ),
+            )
+
+    def signal_stats(self, *, mode: str, symbol: str) -> dict:
+        """Summarize logged signals; joins closed trades for outcome win rates."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT side, COUNT(*) AS count, AVG(confidence) AS avg_confidence
+                FROM signal_log WHERE mode=? AND symbol=?
+                GROUP BY side
+                """,
+                (mode, symbol),
+            ).fetchall()
+        by_side = {
+            str(row["side"]): {
+                "count": int(row["count"]),
+                "avg_confidence": round(float(row["avg_confidence"]), 4)
+                if row["avg_confidence"] is not None
+                else None,
+            }
+            for row in rows
+        }
+        return {
+            "total": sum(item["count"] for item in by_side.values()),
+            "by_side": by_side,
+        }

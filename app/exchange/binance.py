@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import time
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 import httpx
@@ -69,6 +69,14 @@ class BinanceClient:
             if not math.isfinite(delay) or delay <= 0:
                 delay = 60.0
             self._blocked_until[self.base_url] = time.monotonic() + delay
+            logging.getLogger(__name__).warning(
+                "Binance rate limit %s on %s %s; all requests to this endpoint "
+                "pause for %.0fs (Retry-After)",
+                response.status_code,
+                method,
+                path,
+                delay,
+            )
         if response.is_error:
             raise RuntimeError(f"Binance {response.status_code}: {response.text}")
         return response.json()

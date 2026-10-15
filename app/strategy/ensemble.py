@@ -133,6 +133,19 @@ class EnsembleStrategy:
                 entry_checks=checks,
             )
 
+        # Faster protective exit: once price closes below both EMAs the
+        # up-trend that justified the entry is gone, even if short-term
+        # momentum has not yet turned negative.
+        if has_position and x.ema_fast < x.ema_slow and x.close < x.ema_slow:
+            confidence = 0.65 if momentum >= 0 else 0.75
+            return StrategySignal(
+                SignalSide.SELL,
+                confidence,
+                "Trend flip exit: price closed below both EMAs",
+                features,
+                entry_checks=checks,
+            )
+
         failed = [name for name, passed in checks.items() if not passed]
         reason = "Position retained; no strategy exit" if has_position else "Entry requirements not met: " + "; ".join(failed)
         return StrategySignal(SignalSide.HOLD, 0.0, reason, features, entry_checks=checks)

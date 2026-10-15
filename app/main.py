@@ -6,10 +6,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.agents.multi_orchestrator import MultiSymbolTradingManager
 from app.config import SUPPORTED_INTERVALS, get_settings
+from app.logging_setup import configure_logging
 from app.security import trading_control_denial_reason
 from app.strategy.indicators import ema
 from app.ui.dashboard import DASHBOARD_HTML
 
+configure_logging()
 settings = get_settings()
 manager = MultiSymbolTradingManager(settings)
 

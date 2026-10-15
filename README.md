@@ -19,6 +19,15 @@ A conservative Binance Spot trading bot with a simple dashboard, paper/testnet/l
 - Portfolio entry coordination limits simultaneous positions and applies the daily realized-loss check across configured symbols.
 - Restart-safe high-water marks, breakeven protection, and ratcheting trailing stops lock in gains without ever loosening the original stop.
 
+## Strategy improvements (2026-10)
+
+- **Volatility-adaptive stops (optional, off by default):** with `USE_ATR_STOPS=true`, entry stop/target distances are scaled from the signal candle's ATR instead of fixed percentages. Distances are clamped around the configured fixed stop (half to double, plus absolute `ATR_STOP_MIN_PCT`/`ATR_STOP_MAX_PCT` bounds) and preserve the configured reward-to-risk ratio. Position sizing uses the scaled stop distance. Missing or invalid ATR data falls back to the fixed percentages.
+- **Trend-flip exit:** an open position is exited once price closes below both EMAs, even if short-term momentum has not yet turned negative. This caps the previous requirement of a fully confirmed bearish trend before any strategy exit.
+- **Decision logging:** every completed-candle strategy decision (side, confidence, reason, features, entry checks, score components) is persisted to the `signal_log` table for later research. It does not affect trading behavior.
+- **Structured console logging:** engine start/stop, strategy results, order submissions, entries/exits, reconciliation warnings, rate-limit cooldowns, and cycle failures are logged under `LOG_LEVEL` (default `INFO`).
+- **Walk-forward research mode:** `python compare_strategy_intervals.py --walk-forward` optimizes the ADX/volume entry filters on one time fold and evaluates them untouched on the next, reporting out-of-sample results next to the current-configuration baseline. Out-of-sample results on a few folds are weak evidence; treat them as a discipline against overfitting, not a profitability proof.
+
+
 ## Why the strategy does not recalculate every second
 
 While the engine is running, candle fetching and optional LLM advice run in a background task so slow or failed strategy requests do not block subsequent price-based exit checks. Each cycle checks existing positions before strategy processing, learning updates, and balance refreshes. Strategy errors appear in `last_cycle.strategy_error`, and failed refreshes cannot authorize new entries. Manual run-once checks existing exits first, then waits for its strategy result.
@@ -57,6 +66,8 @@ MAX_POSITION_FRACTION=0.05
 MAX_DAILY_LOSS_FRACTION=0.01
 STOP_LOSS_PCT=0.012
 TAKE_PROFIT_PCT=0.024
+USE_ATR_STOPS=true
+ATR_STOP_MULTIPLIER=2.0
 ENABLE_TRAILING_STOP=true
 BREAKEVEN_ACTIVATION_PCT=0.006
 TRAILING_STOP_ACTIVATION_PCT=0.01
@@ -78,8 +89,12 @@ ENABLE_LLM_ADVISOR=false
 py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
+# Runtime only:
 python -m pip install -r requirements.txt
+# Runtime + test/lint tooling (required for pytest and ruff):
+python -m pip install -r requirements-dev.txt
 python -m pytest
+ruff check .
 Copy-Item .env.example .env
 python run.py
 ```
@@ -149,6 +164,10 @@ Additional settings (defaults apply without changing an existing `.env`):
 | `UNIVERSE_PINNED_SYMBOLS` | empty | Comma-separated manual Spot pairs to keep in addition to the volume-ranked set. |
 | `UNIVERSE_EXCLUDED_BASES` | common stablecoins | Comma-separated base assets excluded from dynamic discovery. |
 | `STRATEGY_MIN_ADX` | `16` | Requires additional directional-trend strength for new entries; this is a heuristic, not a profitability claim. |
+| `USE_ATR_STOPS` | `false` | Scale entry stop/target distances from the signal candle ATR (volatility-adaptive). Missing/invalid ATR falls back to the fixed percentages. |
+| `ATR_STOP_MULTIPLIER` | `2.0` | ATR multiple used for the stop distance when `USE_ATR_STOPS=true`. |
+| `ATR_STOP_MIN_PCT` / `ATR_STOP_MAX_PCT` | `0.006` / `0.05` | Absolute clamp bounds for the ATR-scaled stop distance. |
+| `LOG_LEVEL` | `INFO` | Console logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Engine start/stop, orders, entries/exits, warnings, and cycle failures are logged. |
 | `MAX_PORTFOLIO_EXPOSURE_FRACTION` | `0.15` | Blocks entries that would take combined valued non-quote account exposure above 15% of portfolio equity. |
 | `ACCOUNT_MAX_AGE_SECONDS` | `15` | Blocks entries when account valuation is too old; protective exits continue independently. Must be at least `ACCOUNT_REFRESH_SECONDS`. |
 | `MAX_ENTRY_DEVIATION_PCT` | `0.015` | Rejects entries when price has moved more than 1.5% from the signal candle close. |
@@ -559,3 +578,24 @@ The tool is research-only. It uses public historical market data, does not use
 the trading endpoints, does not mutate the bot database, and does not change the
 running Testnet configuration. Historical results do not guarantee future
 performance.
+
+### Walk-forward optimization check
+
+`compare_strategy_intervals.py --walk-forward` guards against parameter tuning
+that only looks good in-sample. The historical window is split into contiguous
+folds; for each fold the ADX and volume-ratio entry filters are re-selected on
+the training segment by stress-adjusted PnL, then evaluated untouched on the
+next segment. The report shows, per symbol and fold: chosen parameters,
+in-sample PnL, out-of-sample PnL, and the same out-of-sample PnL for your
+current configuration as a baseline.
+
+Interpretation guidance:
+
+- Optimized out-of-sample PnL consistently above the baseline suggests the
+  filters carry information; the opposite suggests the defaults are fine (or
+  that the grid is fitting noise).
+- A handful of folds is weak evidence. Re-run across more history
+  (`--days 30`), more folds (`--wf-folds 6`), and multiple intervals before
+  drawing conclusions.
+- The tool is research-only: it never places orders and never changes the
+  running bot configuration.

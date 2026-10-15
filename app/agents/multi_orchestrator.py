@@ -1,10 +1,11 @@
 import asyncio
-import time
+import logging
 import math
-from datetime import datetime, timezone
+import time
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from app.agents.orchestrator import TradingOrchestrator
 from app.config import Settings
@@ -12,6 +13,8 @@ from app.exchange.binance import BinanceClient
 from app.models import ExecutionResult
 from app.runtime_lock import RuntimeFileLock
 from app.storage.db import TradingDB
+
+logger = logging.getLogger(__name__)
 
 
 class PortfolioCoordinator:
@@ -323,8 +326,8 @@ class PortfolioCoordinator:
             return None
         closed_at = datetime.fromisoformat(recent[0]["closed_at"])
         if closed_at.tzinfo is None:
-            closed_at = closed_at.replace(tzinfo=timezone.utc)
-        elapsed = (datetime.now(timezone.utc) - closed_at).total_seconds()
+            closed_at = closed_at.replace(tzinfo=UTC)
+        elapsed = (datetime.now(UTC) - closed_at).total_seconds()
         remaining = self.settings.loss_streak_pause_seconds - elapsed
         if remaining > 0:
             return f"Loss-streak pause: {len(recent)} consecutive losses; retry in {math.ceil(remaining)}s"
@@ -584,8 +587,13 @@ class MultiSymbolTradingManager:
         )
         self.universe_metadata = metadata
         self.universe_error = None
-        self.universe_refreshed_at = datetime.now(timezone.utc).isoformat()
+        self.universe_refreshed_at = datetime.now(UTC).isoformat()
         self._universe_refreshed_monotonic = time.monotonic()
+        logger.info(
+            "Universe refreshed: %d symbol(s) selected [%s]",
+            len(selected),
+            ", ".join(selected),
+        )
         return self.universe_snapshot()
 
     async def refresh_universe(self, *, force: bool = True) -> dict:
@@ -732,7 +740,7 @@ class MultiSymbolTradingManager:
             return_exceptions=True,
         )
         output: dict[str, bool] = {}
-        for symbol, result in zip(symbols, results):
+        for symbol, result in zip(symbols, results, strict=True):
             output[symbol] = False if isinstance(result, Exception) else bool(result)
         await self.portfolio.close()
         self._runtime_lock.release()
@@ -745,7 +753,7 @@ class MultiSymbolTradingManager:
             return_exceptions=True,
         )
         output: dict[str, dict] = {}
-        for symbol, result in zip(symbols, results):
+        for symbol, result in zip(symbols, results, strict=True):
             if isinstance(result, Exception):
                 output[symbol] = {"error": str(result)}
             else:
