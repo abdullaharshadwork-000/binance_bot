@@ -682,6 +682,9 @@ async function loadAll(showLoading=false,force=false){
     syncActionButtons();
     $('cycleNote').textContent=`Risk check every ${d.config.cycle_seconds}s · strategy on closed ${d.config.interval} candles`;
     $('price').textContent=money(d.price);$('symbol').textContent=`${d.config.symbol} · ${d.market_monitor?.source||'waiting'}`;$('equity').textContent=money(d.equity);
+    const equityError=d.equity_error||'';
+    $('equityNote').textContent=d.equity==null&&equityError?('Unavailable · '+equityError):('Estimated current value in '+quoteAsset);
+    $('equityNote').style.color=d.equity==null&&equityError?'var(--red, #ef5350)':'';
     const mm=d.market_monitor||{};
     if(!d.running){$('feedStatus').innerHTML='<span class="amber">STOPPED</span>';$('feedAge').textContent='Focused market engine is stopped'}
     else if(mm.websocket_connected){$('feedStatus').innerHTML='<span class="green">LIVE</span>';$('feedAge').textContent=`WebSocket · price age ${Math.round(mm.price_age_ms||0)} ms`}
