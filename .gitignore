@@ -11,12 +11,7 @@ __pycache__/
 # Pytest cache / temp folders
 .pytest_cache/
 .pytest_tmp/
-.pytest_audit_review/
-.pytest_exit_checks/
-.pytest_exit_checks_final/
 
 # Local data / databases
 data/
 *.db
-.pytest_full_audit_*/
-.pytest_push_check*/
