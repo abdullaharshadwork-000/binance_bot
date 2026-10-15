@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     database_path: str = "data/trading_bot.db"
     learning_profile_path: str = "data/learning_profile.json"
 
+    # Optional outbound notifications (all disabled while blank). The generic
+    # webhook receives JSON {event, text, mode, symbol, timestamp}; Telegram
+    # uses a bot token + chat id. Failures never affect trading.
+    notify_webhook_url: str = ""
+    notify_telegram_bot_token: str = ""
+    notify_telegram_chat_id: str = ""
+    notify_min_interval_seconds: float = Field(default=300.0, ge=0, le=86400)
+
     @model_validator(mode="after")
     def validate_runtime_settings(self):
         self.symbol = self.symbol.strip().upper()

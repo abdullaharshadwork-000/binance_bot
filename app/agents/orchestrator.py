@@ -10,6 +10,7 @@ from app.config import Settings
 from app.exchange.binance import BinanceClient
 from app.execution.broker import Broker
 from app.models import RiskDecision, SignalSide, StrategySignal
+from app.notifications import Notifier
 from app.risk.manager import RiskManager
 from app.storage.db import TradingDB
 from app.strategy.ensemble import EnsembleStrategy
@@ -84,6 +85,15 @@ class TradingOrchestrator:
 
         self.last_equity: float | None = None
         self.last_equity_update_monotonic: float | None = None
+        # Human-readable reason the equity value is currently unavailable.
+        self.last_equity_error: str | None = None
+
+        # Engine health counters surfaced via /metrics.
+        self.cycles_total = 0
+        self.cycle_errors_total = 0
+        self.last_cycle_seconds: float | None = None
+
+        self.notifier = Notifier(settings)
 
     @property
     def _entry_state_key(self) -> str:
@@ -357,9 +367,18 @@ class TradingOrchestrator:
     async def _poll_equity(self, price: float) -> float | None:
         if self.portfolio_guard is not None:
             self.last_equity = await self.portfolio_guard.poll_equity()
+            snapshot_error = self.portfolio_guard.snapshot().get("error")
+            self.last_equity_error = snapshot_error
+            if self.last_equity is None and snapshot_error is None:
+                self.last_equity_error = "Portfolio equity is pending fresh balances and prices"
             return self.last_equity
+
         if self.settings.mode == "paper":
-            self.last_equity = await self.broker.equity(price)
+            try:
+                self.last_equity = await self.broker.equity(price)
+                self.last_equity_error = None
+            except Exception as exc:
+                self.last_equity_error = f"Paper equity update failed: {exc}"
             self.last_equity_update_monotonic = time.monotonic()
             return self.last_equity
 
@@ -369,9 +388,13 @@ class TradingOrchestrator:
             try:
                 self.last_equity = float(await task)
                 self.last_equity_update_monotonic = time.monotonic()
-            except Exception:
+                self.last_equity_error = None
+            except Exception as exc:
                 # Keep the last known equity. Entry will remain blocked if none exists.
-                pass
+                text = str(exc)
+                if "credentials" in text.lower():
+                    text = "Binance API credentials are missing or rejected (" + text + ")"
+                self.last_equity_error = text
 
         now = time.monotonic()
         due = (
@@ -384,6 +407,15 @@ class TradingOrchestrator:
             self.equity_task = asyncio.create_task(self.broker.equity(price))
 
         if self.last_equity_update_monotonic is None or time.monotonic() - self.last_equity_update_monotonic > self.settings.account_max_age_seconds:
+            if self.last_equity_error is None:
+                if self.last_equity_update_monotonic is None:
+                    self.last_equity_error = "Waiting for the first account refresh"
+                else:
+                    age = int(time.monotonic() - self.last_equity_update_monotonic)
+                    self.last_equity_error = (
+                        f"Account data is {age}s old (limit "
+                        f"{int(self.settings.account_max_age_seconds)}s)"
+                    )
             return None
         return self.last_equity
 
@@ -602,6 +634,7 @@ class TradingOrchestrator:
             "price_age_ms": price_age_ms,
             "signal_price": self.cached_signal_price,
             "equity": equity,
+            "equity_error": self.last_equity_error,
             "daily_realized_pnl": daily_pnl,
             "market_monitor": self.market_snapshot(),
             "signal": {
@@ -651,6 +684,11 @@ class TradingOrchestrator:
                 execution.message,
                 execution.details or {},
             )
+            if execution.success:
+                self.notifier.fire_and_forget(
+                    "trades",
+                    f"{symbol} {execution.action} executed: {execution.message}",
+                )
         elif (
             risk_decision is not None
             and not risk_decision.allowed
@@ -666,6 +704,10 @@ class TradingOrchestrator:
                 "%s reconciliation warning: %s",
                 symbol,
                 self.reconciliation_warning,
+            )
+            self.notifier.fire_and_forget(
+                "protection",
+                f"{symbol} reconciliation warning: {self.reconciliation_warning}",
             )
 
     async def _cycle(self, force_strategy: bool = False) -> dict:
@@ -804,6 +846,7 @@ class TradingOrchestrator:
                 "price_age_ms": price_age_ms,
                 "signal_price": float(candidate["signal_price"]),
                 "equity": equity,
+                "equity_error": self.last_equity_error,
                 "daily_realized_pnl": daily_pnl,
                 "market_monitor": self.market_snapshot(),
                 "signal": {
@@ -860,11 +903,18 @@ class TradingOrchestrator:
             started = time.monotonic()
             try:
                 await self._cycle(force_strategy=False)
+                self.cycles_total += 1
+                self.last_cycle_seconds = time.monotonic() - started
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self.cycle_errors_total += 1
                 logger.exception(
                     "%s cycle failed: %s", self.settings.symbol, exc
+                )
+                self.notifier.fire_and_forget(
+                    "errors",
+                    f"{self.settings.symbol} cycle failed: {exc}",
                 )
                 self.last_cycle = {
                     "timestamp": datetime.now(UTC).isoformat(),
@@ -896,6 +946,10 @@ class TradingOrchestrator:
                 self.settings.symbol,
                 self.settings.mode,
                 self.settings.interval,
+            )
+            self.notifier.fire_and_forget(
+                "lifecycle",
+                f"{self.settings.symbol} engine started (mode={self.settings.mode})",
             )
             return True
 
@@ -929,4 +983,8 @@ class TradingOrchestrator:
             self.strategy_task = None
             self.equity_task = None
             await self.exchange.close()
+            self.notifier.fire_and_forget(
+                "lifecycle",
+                f"{self.settings.symbol} engine stopped",
+            )
             return True

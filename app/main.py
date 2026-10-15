@@ -1,7 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.agents.multi_orchestrator import MultiSymbolTradingManager
@@ -71,6 +71,43 @@ async def health():
             symbol for symbol, item in manager.bots.items() if item.running
         ],
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus text-format engine metrics (localhost/private monitoring)."""
+    from app.metrics import render_metrics
+
+    bots_state = []
+    stale_limit_ms = settings.market_data_stale_seconds * 1000
+    for symbol, item in manager.bots.items():
+        snapshot = item.market_snapshot()
+        age_ms = snapshot.get("price_age_ms")
+        bots_state.append({
+            "symbol": symbol,
+            "running": item.running,
+            "cycles_total": item.cycles_total,
+            "cycle_errors_total": item.cycle_errors_total,
+            "last_cycle_seconds": item.last_cycle_seconds,
+            "price_age_seconds": age_ms / 1000 if age_ms is not None else None,
+            "feed_stale": age_ms is None or age_ms > stale_limit_ms,
+            "open_position": item.db.get_open_trade(symbol, settings.mode) is not None,
+        })
+    portfolio = manager.portfolio.snapshot()
+    body = render_metrics(
+        bots_state,
+        {
+            "mode": settings.mode,
+            "equity": portfolio.get("equity"),
+            "daily_realized_pnl": portfolio.get("daily_realized_pnl"),
+            "open_positions": portfolio.get("open_positions"),
+        },
+    )
+    # Plain Response: the body must be raw exposition text, not JSON-encoded.
+    return Response(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 async def _dashboard_payload(symbol: str | None = None) -> dict:
@@ -185,6 +222,7 @@ async def _dashboard_payload(symbol: str | None = None) -> dict:
         "portfolio_running": manager.running,
         "price": price,
         "equity": equity,
+        "equity_error": selected_bot.last_equity_error,
         "daily_realized_pnl": daily_pnl,
         "daily_loss_limit_amount": daily_limit_amount,
         "market_error": market_error,
