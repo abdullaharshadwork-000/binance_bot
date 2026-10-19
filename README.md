@@ -640,3 +640,24 @@ python compare_strategy_intervals.py --walk-forward --days 14 --wf-folds 4
 Consistent selection of one stop mode across folds — with matching
 out-of-sample performance — is meaningful evidence; flip-flopping between
 modes fold to fold means the data cannot yet distinguish them.
+
+### Monitoring and notifications
+
+The dashboard is not the only way to watch the bot:
+
+- **`GET /metrics`** exposes Prometheus text-format metrics: per-symbol engine
+  running state, cycle counters, last cycle duration, market-feed age/staleness,
+  open positions, portfolio equity, and daily realized PnL. Scrape it from a
+  localhost or private-network monitor; treat it like `/status` and never
+  expose the dashboard port publicly.
+- **Account equity transparency**: when equity cannot be valued, the dashboard
+  tile (and `status.equity_error`) states why — e.g. missing/rejected API
+  credentials, a failed account request, waiting for the first refresh, or
+  account data older than `ACCOUNT_MAX_AGE_SECONDS`.
+- **Notifications (optional)**: set `NOTIFY_WEBHOOK_URL` (generic JSON POST:
+  `{event, text, mode, symbol, timestamp}`) and/or
+  `NOTIFY_TELEGRAM_BOT_TOKEN` + `NOTIFY_TELEGRAM_CHAT_ID` to receive alerts
+  for executed trades, reconciliation/protection warnings, engine cycle
+  errors, and start/stop events. Identical events are rate-limited to one
+  message per `NOTIFY_MIN_INTERVAL_SECONDS` (default 300) per event type.
+  Delivery failures are logged and never affect trading.
